@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "qqq-sample-2026",
+  "revision": 1,
   "title": "기초 과학 확인",
   "instructions": "각 문항을 읽고 가장 알맞은 답을 선택하거나 입력하세요.\n제출 후에는 답안을 수정할 수 없습니다.",
   "durationMinutes": 10,

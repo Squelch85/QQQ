@@ -31,3 +31,15 @@ test("응시 화면 모델에서 정답, 채점 규칙, 해설을 제거한다",
 test("잘못된 JSON은 수정 가능한 오류로 변환한다", () => {
   assert.throws(() => parseExamJson("{"), /올바른 JSON 형식/);
 });
+
+test("시험 버전은 1 이상의 정수만 허용한다", () => {
+  assert.equal(validateExam(validExam({ revision: 2 })).valid, true);
+  assert.match(validateExam(validExam({ revision: 0 })).errors.join("\n"), /revision/);
+  assert.match(validateExam(validExam({ revision: 1.5 })).errors.join("\n"), /revision/);
+});
+
+test("버전이 없는 기존 시험지는 버전 1로 마이그레이션한다", () => {
+  const legacy = validExam();
+  delete legacy.revision;
+  assert.equal(parseExamJson(JSON.stringify(legacy)).revision, 1);
+});

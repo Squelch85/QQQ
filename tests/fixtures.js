@@ -2,6 +2,7 @@ export function validExam(overrides = {}) {
   return {
     schemaVersion: 1,
     id: "exam-1",
+    revision: 1,
     title: "테스트 시험",
     instructions: "차분히 푸세요.",
     durationMinutes: 30,

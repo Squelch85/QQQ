@@ -1,6 +1,7 @@
 export const defaultExam = {
   "schemaVersion": 1,
   "id": "inspector-evaluation-2026",
+  "revision": 1,
   "title": "검사원 평가 시험",
   "instructions": "각 문항을 읽고 가장 알맞은 답을 하나 선택하세요. 제출 후에는 답안을 변경할 수 없습니다.",
   "durationMinutes": 30,

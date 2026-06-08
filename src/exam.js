@@ -95,6 +95,7 @@ export function validateExam(candidate) {
     errors.push(`schemaVersion: 지원 버전은 ${EXAM_SCHEMA_VERSION}입니다.`);
   }
   validateText(candidate.id, "id", errors);
+  if (!Number.isInteger(candidate.revision) || candidate.revision < 1) errors.push("revision: 1 이상의 정수여야 합니다.");
   validateText(candidate.title, "title", errors);
   validateText(candidate.instructions, "instructions", errors, { required: false });
 
@@ -148,6 +149,7 @@ export function parseExamJson(text) {
   let candidate;
   try {
     candidate = JSON.parse(text);
+    if (candidate && candidate.revision === undefined) candidate.revision = 1;
   } catch {
     throw new Error("올바른 JSON 형식이 아닙니다.");
   }
@@ -159,6 +161,7 @@ export function parseExamJson(text) {
 export function toPublicExam(exam) {
   return {
     id: exam.id,
+    revision: exam.revision,
     title: exam.title,
     instructions: exam.instructions ?? "",
     durationMinutes: exam.durationMinutes,
