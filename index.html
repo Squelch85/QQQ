@@ -23,7 +23,10 @@
         <div class="hero-actions">
           <button id="default-exam-button" class="primary">기본 시험 시작 <span aria-hidden="true">→</span></button>
           <button id="show-converter-button" class="secondary">문항 JSON 변환</button>
+          <label class="secondary button-label" for="report-file">리포트 불러오기</label>
+          <input id="report-file" type="file" accept="application/json,.json">
         </div>
+        <div id="report-file-error" class="error" role="alert" hidden></div>
       </div>
       <div class="file-card">
         <span class="step">JSON</span>
@@ -43,8 +46,8 @@
       <div class="form-grid converter-settings">
         <label>시험 제목<input id="converter-exam-title" value="검사원 평가 시험"></label>
         <label>제한 시간(분)<input id="converter-duration" type="number" min="0" max="1440" value="30"></label>
-        <label>합격 점수<input id="converter-passing-score" type="number" min="0" value="80"></label>
-        <label>문항당 배점<input id="converter-score" type="number" min="0.1" step="0.1" value="2.5"></label>
+        <label>합격 점수<input id="converter-passing-score" type="number" min="0" max="100" value="80"></label>
+        <label>출제 문항 수<input id="converter-question-count" type="number" min="1" step="1" placeholder="전체 문항"></label>
       </div>
       <label class="block-label" for="converter-source">표 형식 문항</label>
       <textarea id="converter-source" rows="12" placeholder="문항번호&#9;질문&#9;정답&#10;필기1&#9;&quot;질문 내용?&#10;1) 선택지 A  2) 선택지 B&quot;&#9;1"></textarea>
@@ -102,7 +105,8 @@
 
       <section class="report-section" aria-labelledby="report-title">
         <div class="report-heading"><div><p class="eyebrow">SUMMARY</p><h2 id="report-title">누적 응시 리포트</h2></div><strong id="report-count"></strong></div>
-        <div id="wrong-summary" class="wrong-summary"></div>
+        <div class="report-metrics"><div><span>평균 점수</span><strong id="report-average"></strong></div><div><span>합격률</span><strong id="report-pass-rate"></strong></div></div>
+        <div id="report-wrong-summary" class="wrong-summary"></div>
         <div class="table-wrap"><table><thead><tr><th>응시일시</th><th>성명</th><th>사번</th><th>부서</th><th>점수</th><th>합격 여부</th></tr></thead><tbody id="report-body"></tbody></table></div>
       </section>
       <div class="result-actions">
@@ -110,6 +114,19 @@
         <button id="print-button" class="secondary">인쇄</button>
         <button class="text-button home-button">새 시험 시작</button>
       </div>
+    </section>
+
+    <section id="report-view" class="panel result-panel" hidden aria-labelledby="loaded-report-title">
+      <p class="eyebrow">SAVED REPORT</p>
+      <h1 id="loaded-report-title" tabindex="-1"></h1>
+      <p id="loaded-report-generated-at" class="candidate-result"></p>
+      <section class="report-section" aria-labelledby="loaded-report-summary-title">
+        <div class="report-heading"><div><p class="eyebrow">SUMMARY</p><h2 id="loaded-report-summary-title">전체 응시 결과 통계</h2></div><strong id="loaded-report-count"></strong></div>
+        <div class="report-metrics"><div><span>평균 점수</span><strong id="loaded-report-average"></strong></div><div><span>합격률</span><strong id="loaded-report-pass-rate"></strong></div></div>
+        <div id="loaded-report-wrong-summary" class="wrong-summary"></div>
+        <div class="table-wrap"><table><thead><tr><th>응시일시</th><th>성명</th><th>사번</th><th>부서</th><th>점수</th><th>합격 여부</th></tr></thead><tbody id="loaded-report-body"></tbody></table></div>
+      </section>
+      <div class="result-actions"><button class="text-button home-button">처음으로</button></div>
     </section>
   </main>
 

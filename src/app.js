@@ -2,9 +2,9 @@ import { Attempt } from "./attempt.js";
 import { convertQuestionTable } from "./converter.js";
 import { defaultExam } from "./default-exam.js";
 import { getMaxScore, MAX_FILE_BYTES, parseExamJson, toPublicExam } from "./exam.js";
-import { buildExamReport, makeAttemptRecord } from "./report.js";
+import { buildExamReport, createReportFile, makeAttemptRecord, parseReportJson } from "./report.js";
 
-const viewIds = ["load-view", "converter-view", "ready-view", "exam-view", "result-view"];
+const viewIds = ["load-view", "converter-view", "ready-view", "exam-view", "result-view", "report-view"];
 const views = viewIds.map((id) => document.getElementById(id));
 const fileInput = document.getElementById("exam-file");
 const fileError = document.getElementById("file-error");
@@ -178,28 +178,43 @@ function getStoredRecords() {
 
 function storeResult(result) {
   const records = getStoredRecords();
-  records.push(makeAttemptRecord(candidate, result));
+  records.push(makeAttemptRecord(candidate, result, exam));
   localStorage.setItem(`exam-report:${exam.id}`, JSON.stringify(records));
   return records;
 }
 
-function renderReport(records) {
-  const report = buildExamReport(exam, records);
-  document.getElementById("report-count").textContent = `총 ${report.examineeCount}명`;
-  const summary = document.getElementById("wrong-summary");
+function renderReportData(report, target = "result") {
+  const prefix = target === "result" ? "report" : "loaded-report";
+  document.getElementById(`${prefix}-count`).textContent = `총 ${report.examineeCount}명`;
+  document.getElementById(`${prefix}-average`).textContent = `${report.averageScore}점`;
+  document.getElementById(`${prefix}-pass-rate`).textContent = `${report.passRate}% (${report.passedCount}명)`;
+  const summary = document.getElementById(`${prefix}-wrong-summary`);
   if (report.highWrongRate.length === 0) summary.textContent = "현재 오답이 집계된 문항이 없습니다.";
   else summary.replaceChildren(...report.highWrongRate.map((item) => {
     const card = document.createElement("div");
-    card.innerHTML = `<span>${item.questionNumber}번</span><strong>${item.wrongRate}%</strong><small>${item.wrongCount}명 오답</small>`;
+    const label = item.questionNumber ? `${item.questionNumber}번` : item.questionId;
+    const name = document.createElement("span");
+    name.textContent = label;
+    name.title = item.prompt || item.questionId;
+    const rate = document.createElement("strong");
+    rate.textContent = `${item.wrongRate}%`;
+    const count = document.createElement("small");
+    count.textContent = `${item.wrongCount}/${item.attemptCount}명 오답`;
+    card.append(name, rate, count);
     return card;
   }));
-  document.getElementById("report-body").replaceChildren(...report.attempts.slice().reverse().map((record) => {
+  document.getElementById(`${prefix}-body`).replaceChildren(...report.attempts.slice().reverse().map((record) => {
     const row = document.createElement("tr");
     const values = [new Date(record.submittedAt).toLocaleString("ko-KR"), record.candidate.name, record.candidate.employeeId, record.candidate.department || "-", `${record.score}/${record.maxScore}`, record.passed ? "합격" : "불합격"];
     for (const value of values) { const cell = document.createElement("td"); cell.textContent = value; row.append(cell); }
     row.lastElementChild.className = record.passed ? "status-correct" : "status-incorrect";
     return row;
   }));
+}
+
+function renderReport(records) {
+  const report = buildExamReport(exam, records);
+  renderReportData(report);
   return report;
 }
 
@@ -246,7 +261,7 @@ function downloadJson(data, filename) {
 }
 
 function downloadReport() {
-  downloadJson({ schemaVersion: 1, examTitle: exam.title, passingScore: exam.passingScore ?? getMaxScore(exam) * 0.8, generatedAt: new Date().toISOString(), ...buildExamReport(exam, getStoredRecords()) }, `${exam.id}-report.json`);
+  downloadJson(createReportFile(exam, getStoredRecords()), `${exam.id}-report.json`);
 }
 
 function reset() {
@@ -258,6 +273,29 @@ function reset() {
 }
 
 fileInput.addEventListener("change", () => loadSelectedFile(fileInput.files[0]));
+document.getElementById("report-file").addEventListener("change", async (event) => {
+  const input = event.currentTarget;
+  const errorBox = document.getElementById("report-file-error");
+  const file = input.files[0];
+  if (!file) return;
+  try {
+    if (file.size > MAX_FILE_BYTES) throw new Error(`리포트 파일은 ${MAX_FILE_BYTES / 1024 / 1024}MB 이하여야 합니다.`);
+    const report = parseReportJson(await file.text());
+    document.getElementById("loaded-report-title").textContent = report.examTitle;
+    document.getElementById("loaded-report-generated-at").textContent = report.generatedAt
+      ? `생성일시 ${new Date(report.generatedAt).toLocaleString("ko-KR")}`
+      : "";
+    renderReportData(report, "loaded");
+    errorBox.hidden = true;
+    showView("report-view");
+    document.getElementById("loaded-report-title").focus({ preventScroll: true });
+  } catch (error) {
+    errorBox.textContent = error instanceof Error ? error.message : "리포트를 열 수 없습니다.";
+    errorBox.hidden = false;
+    input.value = "";
+  }
+});
+
 document.getElementById("default-exam-button").addEventListener("click", () => prepareExam(defaultExam));
 document.getElementById("show-converter-button").addEventListener("click", () => { showView("converter-view"); document.getElementById("converter-title").focus(); });
 document.getElementById("convert-button").addEventListener("click", () => {
@@ -267,7 +305,7 @@ document.getElementById("convert-button").addEventListener("click", () => {
       title: document.getElementById("converter-exam-title").value,
       durationMinutes: document.getElementById("converter-duration").value,
       passingScore: document.getElementById("converter-passing-score").value,
-      scorePerQuestion: document.getElementById("converter-score").value
+      questionCount: document.getElementById("converter-question-count").value
     });
     parseExamJson(JSON.stringify(converted));
     errorBox.hidden = true;
