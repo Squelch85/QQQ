@@ -1786,32 +1786,66 @@ function getExamReportStorageKey(examId) {
   return `${REPORT_STORAGE_PREFIX}${examId}`;
 }
 
-function readExamReportRecords(storage, examId) {
+function readStoredValue(storage, examId) {
   try {
-    const records = JSON.parse(storage.getItem(getExamReportStorageKey(examId)) || "[]");
+    return storage?.getItem(getExamReportStorageKey(examId)) || "";
+  } catch {
+    return "";
+  }
+}
+
+function readLegacyJsonRecords(value) {
+  try {
+    const records = JSON.parse(value);
     return Array.isArray(records) ? records : [];
   } catch {
     return [];
   }
 }
 
-function writeExamReportRecords(storage, examId, records) {
+function readExamReportCsv(storage, exam) {
+  const value = readStoredValue(storage, exam.id);
+  if (!value || value.trimStart().startsWith("[")) return "";
   try {
-    storage.setItem(getExamReportStorageKey(examId), JSON.stringify(records));
-    return true;
+    const report = parseReportCsv(value);
+    return report.examId === exam.id ? value : "";
   } catch {
-    return false;
+    return "";
   }
 }
 
-function appendExamReportRecord(storage, examId, record) {
-  const records = readExamReportRecords(storage, examId);
+function readExamReportRecords(storage, exam) {
+  const value = readStoredValue(storage, exam.id);
+  if (!value) return [];
+  if (value.trimStart().startsWith("[")) return readLegacyJsonRecords(value);
+  try {
+    const report = parseReportCsv(value);
+    return report.examId === exam.id ? report.attempts : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeExamReportRecords(storage, exam, records, generatedAt) {
+  const csv = createReportCsv(exam, records, generatedAt);
+  if (!storage) return { csv, stored: false };
+  try {
+    storage.setItem(getExamReportStorageKey(exam.id), csv);
+    return { csv, stored: true };
+  } catch {
+    return { csv, stored: false };
+  }
+}
+
+function appendExamReportRecord(storage, exam, record, generatedAt) {
+  const records = readExamReportRecords(storage, exam);
   records.push(record);
-  writeExamReportRecords(storage, examId, records);
-  return records;
+  const { csv, stored } = writeExamReportRecords(storage, exam, records, generatedAt);
+  return { records, csv, stored };
 }
 
 function clearExamReportRecords(storage, examId) {
+  if (!storage) return false;
   try {
     storage.removeItem(getExamReportStorageKey(examId));
     return true;
@@ -1996,11 +2030,11 @@ function statusLabel(status) {
 }
 
 function getStoredRecords() {
-  return readExamReportRecords(reportStorage, exam.id);
+  return readExamReportRecords(reportStorage, exam);
 }
 
 function storeResult(result) {
-  return appendExamReportRecord(reportStorage, exam.id, makeAttemptRecord(candidate, result, exam));
+  return appendExamReportRecord(reportStorage, exam, makeAttemptRecord(candidate, result, exam));
 }
 
 function renderReportData(report, target = "result") {
@@ -2071,9 +2105,9 @@ function finalizeSubmission() {
   timer.hidden = true;
   attempt.submit();
   const result = attempt.grade();
-  const records = storeResult(result);
-  downloadReport(records);
-  renderResult(result, records);
+  const reportState = storeResult(result);
+  downloadReport(reportState.csv);
+  renderResult(result, reportState.records);
 }
 
 function downloadJson(data, filename) {
@@ -2082,8 +2116,7 @@ function downloadJson(data, filename) {
   link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url);
 }
 
-function downloadReport(records = getStoredRecords()) {
-  const csv = createReportCsv(exam, records);
+function downloadReport(csv = readExamReportCsv(reportStorage, exam) || createReportCsv(exam, getStoredRecords())) {
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
   const link = document.createElement("a");
   link.href = url;
@@ -2154,7 +2187,7 @@ document.getElementById("previous-button").addEventListener("click", () => rende
 document.getElementById("next-button").addEventListener("click", () => renderQuestion(currentQuestionIndex + 1));
 document.getElementById("submit-button").addEventListener("click", () => openSubmitDialog());
 document.getElementById("confirm-submit").addEventListener("click", finalizeSubmission);
-document.getElementById("download-button").addEventListener("click", downloadReport);
+document.getElementById("download-button").addEventListener("click", () => downloadReport());
 document.getElementById("print-button").addEventListener("click", () => window.print());
 for (const button of document.querySelectorAll(".home-button")) button.addEventListener("click", reset);
 

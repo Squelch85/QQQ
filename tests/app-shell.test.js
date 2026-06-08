@@ -46,8 +46,9 @@ test("누적 리포트는 CSV 파일로 저장하고 불러온다", async () => 
   assert.match(html, /id="report-file" type="file" accept="text\/csv,\.csv"/);
   assert.match(html, /누적 리포트 CSV 다시 저장/);
   assert.match(html, /최신 누적 CSV도 자동 저장/);
-  assert.match(appSource, /const records = storeResult\(result\);\s+downloadReport\(records\);\s+renderResult\(result, records\);/);
-  assert.match(appSource, /createReportCsv\(exam, records\)/);
+  assert.match(appSource, /const reportState = storeResult\(result\);\s+downloadReport\(reportState\.csv\);\s+renderResult\(result, reportState\.records\);/);
+  assert.match(appSource, /readExamReportCsv\(reportStorage, exam\) \|\| createReportCsv\(exam, getStoredRecords\(\)\)/);
   assert.match(appSource, /parseReportCsv\(await file\.text\(\)\)/);
   assert.match(appSource, /type: "text\/csv;charset=utf-8"/);
+  assert.doesNotMatch(appSource, /showSaveFilePicker|showDirectoryPicker/);
 });
