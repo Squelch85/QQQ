@@ -70,7 +70,7 @@
           <label>사번 <span aria-hidden="true">*</span><input id="candidate-id" name="employeeId" required maxlength="50"></label>
           <label>부서<input id="candidate-department" name="department" maxlength="80"></label>
         </div>
-        <p class="privacy-note">입력 정보와 시험 결과는 이 브라우저에만 저장됩니다.</p>
+        <p class="privacy-note">입력 정보와 시험 결과는 이 브라우저에 자동 누적되며, 제출할 때 최신 누적 CSV도 자동 저장됩니다.</p>
         <button id="start-button" class="primary" type="submit">정보 확인 후 시험 시작 <span aria-hidden="true">→</span></button>
         <button class="text-button home-button" type="button">다른 시험 선택</button>
       </form>
@@ -110,7 +110,7 @@
         <div class="table-wrap"><table><thead><tr><th>응시일시</th><th>성명</th><th>사번</th><th>부서</th><th>점수</th><th>합격 여부</th></tr></thead><tbody id="report-body"></tbody></table></div>
       </section>
       <div class="result-actions">
-        <button id="download-button" class="primary">누적 리포트 CSV 저장</button>
+        <button id="download-button" class="primary">누적 리포트 CSV 다시 저장</button>
         <button id="print-button" class="secondary">인쇄</button>
         <button class="text-button home-button">새 시험 시작</button>
       </div>
