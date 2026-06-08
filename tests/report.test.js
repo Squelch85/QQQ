@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildExamReport, createReportFile, makeAttemptRecord, parseReportJson } from "../src/report.js";
-import { clearExamReportRecords, getExamReportStorageKey, readExamReportRecords } from "../src/report-storage.js";
+import { appendExamReportRecord, clearExamReportRecords, getExamReportStorageKey, readExamReportRecords, writeExamReportRecords } from "../src/report-storage.js";
 import { validExam } from "./fixtures.js";
 
 test("응시자별 합격 여부와 문항 ID 기준 오답률 및 전체 통계를 집계한다", () => {
@@ -63,4 +63,17 @@ test("시험지 JSON 재로드를 위해 시험별 누적 결과 저장소를 �
 
   assert.equal(storage.has(key), false);
   assert.deepEqual(readExamReportRecords(storageAdapter, "exam-a"), []);
+});
+
+test("저장소를 사용할 수 없어도 새 시험 초기화와 결과 처리를 계속한다", () => {
+  const unavailableStorage = {
+    getItem: () => { throw new Error("storage unavailable"); },
+    removeItem: () => { throw new Error("storage unavailable"); },
+    setItem: () => { throw new Error("storage unavailable"); }
+  };
+  const record = { candidate: { name: "오프라인 수검자" } };
+
+  assert.equal(clearExamReportRecords(unavailableStorage, "exam-a"), false);
+  assert.equal(writeExamReportRecords(unavailableStorage, "exam-a", [record]), false);
+  assert.deepEqual(appendExamReportRecord(unavailableStorage, "exam-a", record), [record]);
 });

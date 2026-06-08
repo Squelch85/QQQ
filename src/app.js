@@ -12,6 +12,13 @@ const fileError = document.getElementById("file-error");
 const timer = document.getElementById("timer");
 const liveStatus = document.getElementById("live-status");
 const submitDialog = document.getElementById("submit-dialog");
+const reportStorage = (() => {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+})();
 let exam = null;
 let publicExam = null;
 let attempt = null;
@@ -36,7 +43,7 @@ function formatDuration(minutes) {
 
 function prepareExam(nextExam, { resetRecords = false } = {}) {
   exam = structuredClone(nextExam);
-  if (resetRecords) clearExamReportRecords(localStorage, exam.id);
+  if (resetRecords) clearExamReportRecords(reportStorage, exam.id);
   publicExam = toPublicExam(exam);
   attempt = new Attempt(exam);
   document.getElementById("exam-title").textContent = publicExam.title;
@@ -174,11 +181,11 @@ function statusLabel(status) {
 }
 
 function getStoredRecords() {
-  return readExamReportRecords(localStorage, exam.id);
+  return readExamReportRecords(reportStorage, exam.id);
 }
 
 function storeResult(result) {
-  return appendExamReportRecord(localStorage, exam.id, makeAttemptRecord(candidate, result, exam));
+  return appendExamReportRecord(reportStorage, exam.id, makeAttemptRecord(candidate, result, exam));
 }
 
 function renderReportData(report, target = "result") {
@@ -294,7 +301,8 @@ document.getElementById("report-file").addEventListener("change", async (event) 
   }
 });
 
-document.getElementById("default-exam-button").addEventListener("click", () => prepareExam(defaultExam));
+document.getElementById("home-link").addEventListener("click", (event) => { event.preventDefault(); reset(); });
+document.getElementById("default-exam-button").addEventListener("click", () => prepareExam(defaultExam, { resetRecords: true }));
 document.getElementById("show-converter-button").addEventListener("click", () => { showView("converter-view"); document.getElementById("converter-title").focus(); });
 document.getElementById("convert-button").addEventListener("click", () => {
   const errorBox = document.getElementById("converter-error");

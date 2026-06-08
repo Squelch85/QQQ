@@ -14,7 +14,12 @@ export function readExamReportRecords(storage, examId) {
 }
 
 export function writeExamReportRecords(storage, examId, records) {
-  storage.setItem(getExamReportStorageKey(examId), JSON.stringify(records));
+  try {
+    storage.setItem(getExamReportStorageKey(examId), JSON.stringify(records));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function appendExamReportRecord(storage, examId, record) {
@@ -25,5 +30,10 @@ export function appendExamReportRecord(storage, examId, record) {
 }
 
 export function clearExamReportRecords(storage, examId) {
-  storage.removeItem(getExamReportStorageKey(examId));
+  try {
+    storage.removeItem(getExamReportStorageKey(examId));
+    return true;
+  } catch {
+    return false;
+  }
 }
