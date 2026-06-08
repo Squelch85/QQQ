@@ -3,7 +3,7 @@ import { convertQuestionTable } from "./converter.js";
 import { defaultExam } from "./default-exam.js";
 import { getMaxScore, MAX_FILE_BYTES, parseExamJson, toPublicExam } from "./exam.js";
 import { buildExamReport, createReportCsv, makeAttemptRecord, parseReportCsv } from "./report.js";
-import { appendExamReportRecord, readExamReportRecords } from "./report-storage.js";
+import { appendExamReportRecord, readExamReportCsv, readExamReportRecords } from "./report-storage.js";
 
 const viewIds = ["load-view", "converter-view", "ready-view", "exam-view", "result-view", "report-view"];
 const views = viewIds.map((id) => document.getElementById(id));
@@ -180,11 +180,11 @@ function statusLabel(status) {
 }
 
 function getStoredRecords() {
-  return readExamReportRecords(reportStorage, exam.id);
+  return readExamReportRecords(reportStorage, exam);
 }
 
 function storeResult(result) {
-  return appendExamReportRecord(reportStorage, exam.id, makeAttemptRecord(candidate, result, exam));
+  return appendExamReportRecord(reportStorage, exam, makeAttemptRecord(candidate, result, exam));
 }
 
 function renderReportData(report, target = "result") {
@@ -255,9 +255,9 @@ function finalizeSubmission() {
   timer.hidden = true;
   attempt.submit();
   const result = attempt.grade();
-  const records = storeResult(result);
-  downloadReport(records);
-  renderResult(result, records);
+  const reportState = storeResult(result);
+  downloadReport(reportState.csv);
+  renderResult(result, reportState.records);
 }
 
 function downloadJson(data, filename) {
@@ -266,8 +266,7 @@ function downloadJson(data, filename) {
   link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url);
 }
 
-function downloadReport(records = getStoredRecords()) {
-  const csv = createReportCsv(exam, records);
+function downloadReport(csv = readExamReportCsv(reportStorage, exam) || createReportCsv(exam, getStoredRecords())) {
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
   const link = document.createElement("a");
   link.href = url;
@@ -338,6 +337,6 @@ document.getElementById("previous-button").addEventListener("click", () => rende
 document.getElementById("next-button").addEventListener("click", () => renderQuestion(currentQuestionIndex + 1));
 document.getElementById("submit-button").addEventListener("click", () => openSubmitDialog());
 document.getElementById("confirm-submit").addEventListener("click", finalizeSubmission);
-document.getElementById("download-button").addEventListener("click", downloadReport);
+document.getElementById("download-button").addEventListener("click", () => downloadReport());
 document.getElementById("print-button").addEventListener("click", () => window.print());
 for (const button of document.querySelectorAll(".home-button")) button.addEventListener("click", reset);

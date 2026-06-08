@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildExamReport, createReportCsv, makeAttemptRecord, parseReportCsv } from "../src/report.js";
-import { appendExamReportRecord, clearExamReportRecords, getExamReportStorageKey, readExamReportRecords, writeExamReportRecords } from "../src/report-storage.js";
+import { appendExamReportRecord, clearExamReportRecords, getExamReportStorageKey, readExamReportCsv, readExamReportRecords, writeExamReportRecords } from "../src/report-storage.js";
 import { validExam } from "./fixtures.js";
 
 test("응시자별 합격 여부와 문항 ID 기준 오답률 및 전체 통계를 집계한다", () => {
@@ -102,47 +102,95 @@ test("누적 리포트 CSV의 형식과 행 일관성을 검증한다", () => {
   assert.throws(() => parseReportCsv(inconsistent), /리포트 정보가 첫 번째 응시 결과와 다릅니다/);
 });
 
-test("시험지 JSON 재로드를 위해 시험별 누적 결과 저장소를 초기화한다", () => {
+test("시험별 누적 CSV 저장소를 초기화한다", () => {
+  const exam = validExam();
   const storage = new Map();
   const storageAdapter = {
     getItem: (key) => storage.get(key) ?? null,
     removeItem: (key) => storage.delete(key),
     setItem: (key, value) => storage.set(key, value)
   };
-  const key = getExamReportStorageKey("exam-a");
-  storage.set(key, JSON.stringify([{ candidate: { name: "기존 수검자" } }]));
+  const key = getExamReportStorageKey(exam.id);
+  storage.set(key, createReportCsv(exam, [{
+    candidate: { name: "기존 수검자", employeeId: "A00", department: "" },
+    submittedAt: "2026-06-08T00:00:00.000Z", score: 0, maxScore: 60, items: []
+  }]));
 
-  clearExamReportRecords(storageAdapter, "exam-a");
+  clearExamReportRecords(storageAdapter, exam.id);
 
   assert.equal(storage.has(key), false);
-  assert.deepEqual(readExamReportRecords(storageAdapter, "exam-a"), []);
+  assert.deepEqual(readExamReportRecords(storageAdapter, exam), []);
 });
 
-test("동일 시험의 인원별 결과를 별도 저장 동작 없이 순서대로 누적한다", () => {
+test("CSV가 없으면 생성하고 동일 시험의 인원별 결과를 순서대로 누적한다", () => {
+  const exam = validExam();
   const storage = new Map();
   const storageAdapter = {
     getItem: (key) => storage.get(key) ?? null,
     removeItem: (key) => storage.delete(key),
     setItem: (key, value) => storage.set(key, value)
   };
-  const first = { candidate: { name: "첫 번째 수검자", employeeId: "A01" } };
-  const second = { candidate: { name: "두 번째 수검자", employeeId: "A02" } };
+  const first = {
+    candidate: { name: "첫 번째 수검자", employeeId: "A01", department: "품질" },
+    submittedAt: "2026-06-08T00:00:00.000Z", score: 60, maxScore: 60, items: []
+  };
+  const second = {
+    candidate: { name: "두 번째 수검자", employeeId: "A02", department: "검사" },
+    submittedAt: "2026-06-08T01:00:00.000Z", score: 30, maxScore: 60, items: []
+  };
 
-  assert.deepEqual(appendExamReportRecord(storageAdapter, "exam-a", first), [first]);
-  assert.deepEqual(appendExamReportRecord(storageAdapter, "exam-a", second), [first, second]);
-  assert.deepEqual(readExamReportRecords(storageAdapter, "exam-a"), [first, second]);
-  assert.deepEqual(readExamReportRecords(storageAdapter, "exam-b"), []);
+  const firstState = appendExamReportRecord(storageAdapter, exam, first, "2026-06-08T02:00:00.000Z");
+  assert.equal(firstState.stored, true);
+  assert.ok(firstState.csv.startsWith("\uFEFF리포트 버전,"));
+  assert.equal(readExamReportCsv(storageAdapter, exam), firstState.csv);
+
+  const secondState = appendExamReportRecord(storageAdapter, exam, second, "2026-06-08T03:00:00.000Z");
+  assert.deepEqual(secondState.records.map((record) => record.candidate.name), ["첫 번째 수검자", "두 번째 수검자"]);
+  assert.equal(parseReportCsv(secondState.csv).examineeCount, 2);
+  assert.equal(readExamReportCsv(storageAdapter, exam), secondState.csv);
+  assert.deepEqual(readExamReportRecords(storageAdapter, validExam({ id: "exam-b" })), []);
 });
 
-test("저장소를 사용할 수 없어도 새 시험 초기화와 결과 처리를 계속한다", () => {
+test("기존 JSON 누적 결과는 다음 제출 때 CSV로 마이그레이션한다", () => {
+  const exam = validExam();
+  const storage = new Map();
+  const storageAdapter = {
+    getItem: (key) => storage.get(key) ?? null,
+    removeItem: (key) => storage.delete(key),
+    setItem: (key, value) => storage.set(key, value)
+  };
+  const legacy = {
+    candidate: { name: "기존 수검자", employeeId: "A00", department: "" },
+    submittedAt: "2026-06-08T00:00:00.000Z", score: 60, maxScore: 60, items: []
+  };
+  const current = {
+    candidate: { name: "신규 수검자", employeeId: "A01", department: "" },
+    submittedAt: "2026-06-08T01:00:00.000Z", score: 30, maxScore: 60, items: []
+  };
+  storage.set(getExamReportStorageKey(exam.id), JSON.stringify([legacy]));
+
+  const state = appendExamReportRecord(storageAdapter, exam, current, "2026-06-08T02:00:00.000Z");
+
+  assert.deepEqual(state.records.map((record) => record.candidate.name), ["기존 수검자", "신규 수검자"]);
+  assert.ok(storage.get(getExamReportStorageKey(exam.id)).startsWith("\uFEFF리포트 버전,"));
+});
+
+test("저장소를 사용할 수 없어도 CSV 생성과 결과 처리를 계속한다", () => {
+  const exam = validExam();
   const unavailableStorage = {
     getItem: () => { throw new Error("storage unavailable"); },
     removeItem: () => { throw new Error("storage unavailable"); },
     setItem: () => { throw new Error("storage unavailable"); }
   };
-  const record = { candidate: { name: "오프라인 수검자" } };
+  const record = {
+    candidate: { name: "오프라인 수검자", employeeId: "A01", department: "" },
+    submittedAt: "2026-06-08T00:00:00.000Z", score: 60, maxScore: 60, items: []
+  };
 
-  assert.equal(clearExamReportRecords(unavailableStorage, "exam-a"), false);
-  assert.equal(writeExamReportRecords(unavailableStorage, "exam-a", [record]), false);
-  assert.deepEqual(appendExamReportRecord(unavailableStorage, "exam-a", record), [record]);
+  assert.equal(clearExamReportRecords(unavailableStorage, exam.id), false);
+  assert.equal(writeExamReportRecords(unavailableStorage, exam, [record]).stored, false);
+  const state = appendExamReportRecord(unavailableStorage, exam, record);
+  assert.equal(state.stored, false);
+  assert.deepEqual(state.records, [record]);
+  assert.equal(parseReportCsv(state.csv).examineeCount, 1);
 });
