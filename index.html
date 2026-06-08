@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>QQQ 오프라인 시험</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="./" aria-label="QQQ 처음 화면"><span>Q</span>QQ</a>
+    <p>연결 없이, 흔들림 없이.</p>
+    <div id="timer" class="timer" hidden aria-live="polite"></div>
+  </header>
+
+  <main>
+    <section id="load-view" class="hero" aria-labelledby="load-title">
+      <div class="hero-copy">
+        <p class="eyebrow">OFFLINE EXAM TOOL</p>
+        <h1 id="load-title">시험에만<br><em>집중하세요.</em></h1>
+        <p class="lead">시험지를 이 브라우저에서 열고, 답하고, 바로 확인합니다. 답안은 서버로 전송되지 않습니다.</p>
+      </div>
+      <div class="file-card">
+        <span class="step">01</span>
+        <h2>시험지 열기</h2>
+        <p>준비된 JSON 시험지 파일을 선택하세요.</p>
+        <label class="file-button" for="exam-file">파일 선택 <span aria-hidden="true">↗</span></label>
+        <input id="exam-file" type="file" accept="application/json,.json">
+        <p class="sample-link"><a href="examples/sample-exam.json" download>예제 시험지 내려받기</a></p>
+        <div id="file-error" class="error" role="alert" hidden></div>
+      </div>
+    </section>
+
+    <section id="ready-view" class="panel" hidden aria-labelledby="exam-title">
+      <p class="eyebrow">READY</p>
+      <h1 id="exam-title" tabindex="-1"></h1>
+      <p id="exam-meta" class="meta"></p>
+      <div id="exam-instructions" class="instructions"></div>
+      <button id="start-button" class="primary">시험 시작 <span aria-hidden="true">→</span></button>
+      <button class="text-button reset-button">다른 시험지 선택</button>
+    </section>
+
+    <section id="exam-view" hidden aria-labelledby="question-heading">
+      <div class="exam-layout">
+        <aside class="question-nav" aria-label="문항 목록">
+          <p class="eyebrow">QUESTIONS</p>
+          <ol id="question-list"></ol>
+          <div class="progress-copy"><strong id="answered-count">0</strong> / <span id="question-count">0</span> 응답</div>
+        </aside>
+        <article class="question-card">
+          <div class="question-topline">
+            <span id="question-number"></span>
+            <span id="question-score"></span>
+          </div>
+          <h2 id="question-heading" tabindex="-1"></h2>
+          <form id="answer-form"></form>
+          <div class="question-actions">
+            <button id="previous-button" type="button" class="secondary">← 이전</button>
+            <button id="next-button" type="button" class="primary">다음 →</button>
+          </div>
+        </article>
+      </div>
+      <div class="submit-bar">
+        <p id="submit-summary"></p>
+        <button id="submit-button" class="dark">최종 제출</button>
+      </div>
+    </section>
+
+    <section id="result-view" class="panel result-panel" hidden aria-labelledby="result-title">
+      <p class="eyebrow">RESULT</p>
+      <h1 id="result-title" tabindex="-1">채점이 완료되었습니다.</h1>
+      <div class="score-display"><strong id="result-score"></strong><span id="result-max-score"></span></div>
+      <ol id="result-items" class="result-items"></ol>
+      <div class="result-actions">
+        <button id="download-button" class="primary">결과 저장</button>
+        <button id="print-button" class="secondary">인쇄</button>
+        <button class="text-button reset-button">새 시험 열기</button>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="submit-dialog" aria-labelledby="submit-dialog-title">
+    <form method="dialog">
+      <p class="eyebrow">FINAL CHECK</p>
+      <h2 id="submit-dialog-title">제출할까요?</h2>
+      <p id="submit-dialog-copy"></p>
+      <p>제출한 뒤에는 답안을 변경할 수 없습니다.</p>
+      <div class="dialog-actions">
+        <button value="cancel" class="secondary">계속 풀기</button>
+        <button id="confirm-submit" value="confirm" class="dark">제출하고 채점</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="live-status" class="visually-hidden" aria-live="polite"></div>
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>

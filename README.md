@@ -53,4 +53,28 @@
 
 ## 현재 상태
 
-현재 저장소는 **단순 오프라인 시험 응시·평가·채점 방향과 품질 기준을 수립한 기획 단계**입니다. 기술 스택은 구현 착수 전에 단일 실행 방식, 지원 운영체제, 시험지 파일 형식을 기준으로 ADR(Architecture Decision Record)에서 확정합니다.
+현재 저장소에는 **외부 패키지 없이 실행하는 로컬 웹 MVP의 첫 수직 슬라이스**가 구현되어 있습니다. JSON 시험지 검증, 세 가지 문제 유형 응답, 메모리 기반 제출 스냅샷, 자동 채점, 결과 저장과 인쇄를 지원합니다. 기술 선택은 ADR에 기록하며 데스크톱 패키징과 추가 운영체제 지원은 실제 배포 요구가 확인될 때 결정합니다.
+
+## 로컬 실행
+
+초기 구현은 외부 패키지 설치가 필요 없는 로컬 웹 애플리케이션입니다. Node.js 20 이상과 Python 3가 설치된 환경을 기준으로 합니다.
+
+```bash
+npm test
+npm run check
+npm start
+```
+
+브라우저에서 `http://localhost:4173`을 열고 JSON 시험지를 선택합니다. 바로 확인하려면 [`examples/sample-exam.json`](examples/sample-exam.json)을 사용할 수 있습니다. 애플리케이션은 실행 중 네트워크 요청을 만들지 않으며 답안과 결과는 기본적으로 메모리에만 유지합니다.
+
+## 시험지 형식
+
+시험지는 `schemaVersion: 1`인 JSON 객체입니다. 현재 지원 유형은 다음과 같습니다.
+
+- `single_choice`: `choices`와 `scoring.correctChoiceId` 사용
+- `multiple_choice`: `choices`와 `scoring.correctChoiceIds` 사용, 정답 집합 완전 일치 시 득점
+- `short_answer`: `scoring.acceptedAnswers`와 선택적 `normalization` 사용
+
+단답형 정규화 옵션은 `trim`, `collapseWhitespace`, `caseInsensitive`이며 각 옵션을 명시적으로 `true`로 지정한 경우에만 적용합니다. 전체 예시는 예제 시험지에서 확인할 수 있습니다.
+
+기술 선택 배경과 제약은 [`docs/adr/0001-local-web-es-modules.md`](docs/adr/0001-local-web-es-modules.md)에 기록했습니다.
