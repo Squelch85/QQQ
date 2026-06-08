@@ -78,3 +78,9 @@ npm start
 단답형 정규화 옵션은 `trim`, `collapseWhitespace`, `caseInsensitive`이며 각 옵션을 명시적으로 `true`로 지정한 경우에만 적용합니다. 전체 예시는 예제 시험지에서 확인할 수 있습니다.
 
 기술 선택 배경과 제약은 [`docs/adr/0001-local-web-es-modules.md`](docs/adr/0001-local-web-es-modules.md)에 기록했습니다.
+
+## 검사원 평가 시험과 문항 변환
+
+첫 화면의 **기본 시험 시작** 버튼으로 40문항의 `검사원 평가 시험`을 바로 실행할 수 있습니다. 시험 시작 전 성명, 사번, 부서를 입력하며, 제출 후 응시자별 점수·합격 여부와 오답률이 높은 상위 5개 문항을 `SUMMARY`에서 확인합니다. 누적 결과는 같은 브라우저의 로컬 저장소에만 보관되며 전체 리포트를 JSON으로 저장할 수 있습니다.
+
+**문항 JSON 변환**에서는 스프레드시트의 `문항번호`, `질문`, `정답` 세 열을 그대로 붙여 넣어 시험지 JSON으로 변환합니다. 질문 셀 안의 선택지는 `1)`, `2)`, `3)`, `4)` 형식으로 작성해야 하며 여러 줄 셀과 큰따옴표로 감싼 TSV 입력을 지원합니다. 기본 시험 JSON은 [`examples/inspector-evaluation-exam.json`](examples/inspector-evaluation-exam.json)에서 내려받을 수 있습니다.

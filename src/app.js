@@ -1,7 +1,11 @@
 import { Attempt } from "./attempt.js";
-import { MAX_FILE_BYTES, parseExamJson, toPublicExam } from "./exam.js";
+import { convertQuestionTable } from "./converter.js";
+import { defaultExam } from "./default-exam.js";
+import { getMaxScore, MAX_FILE_BYTES, parseExamJson, toPublicExam } from "./exam.js";
+import { buildExamReport, makeAttemptRecord } from "./report.js";
 
-const views = ["load-view", "ready-view", "exam-view", "result-view"].map((id) => document.getElementById(id));
+const viewIds = ["load-view", "converter-view", "ready-view", "exam-view", "result-view"];
+const views = viewIds.map((id) => document.getElementById(id));
 const fileInput = document.getElementById("exam-file");
 const fileError = document.getElementById("file-error");
 const timer = document.getElementById("timer");
@@ -10,6 +14,7 @@ const submitDialog = document.getElementById("submit-dialog");
 let exam = null;
 let publicExam = null;
 let attempt = null;
+let candidate = null;
 let currentQuestionIndex = 0;
 let timerId = null;
 let deadline = null;
@@ -28,19 +33,25 @@ function formatDuration(minutes) {
   return minutes === 0 ? "시간 제한 없음" : `${minutes}분`;
 }
 
+function prepareExam(nextExam) {
+  exam = structuredClone(nextExam);
+  publicExam = toPublicExam(exam);
+  attempt = new Attempt(exam);
+  document.getElementById("exam-title").textContent = publicExam.title;
+  const passingScore = exam.passingScore ?? getMaxScore(exam) * 0.8;
+  document.getElementById("exam-meta").textContent = `${publicExam.questions.length}문항 · ${formatDuration(publicExam.durationMinutes)} · 합격 ${passingScore}점 이상`;
+  document.getElementById("exam-instructions").textContent = publicExam.instructions || "별도 유의사항이 없습니다.";
+  document.getElementById("candidate-form").reset();
+  showView("ready-view");
+  document.getElementById("exam-title").focus({ preventScroll: true });
+}
+
 async function loadSelectedFile(file) {
   fileError.hidden = true;
   if (!file) return;
   try {
     if (file.size > MAX_FILE_BYTES) throw new Error(`시험지 파일은 ${MAX_FILE_BYTES / 1024 / 1024}MB 이하여야 합니다.`);
-    exam = parseExamJson(await file.text());
-    publicExam = toPublicExam(exam);
-    attempt = new Attempt(exam);
-    document.getElementById("exam-title").textContent = publicExam.title;
-    document.getElementById("exam-meta").textContent = `${publicExam.questions.length}문항 · ${formatDuration(publicExam.durationMinutes)}`;
-    document.getElementById("exam-instructions").textContent = publicExam.instructions || "별도 유의사항이 없습니다.";
-    showView("ready-view");
-    document.getElementById("exam-title").focus({ preventScroll: true });
+    prepareExam(parseExamJson(await file.text()));
   } catch (error) {
     fileError.textContent = error instanceof Error ? error.message : "시험지를 열 수 없습니다.";
     fileError.hidden = false;
@@ -53,11 +64,12 @@ function renderQuestionNavigation() {
   list.replaceChildren(...publicExam.questions.map((question, index) => {
     const item = document.createElement("li");
     const button = document.createElement("button");
+    const answered = attempt.isAnswered(question.id);
     button.type = "button";
     button.textContent = String(index + 1);
     button.classList.toggle("active", index === currentQuestionIndex);
-    button.classList.toggle("answered", attempt.isAnswered(question.id));
-    button.setAttribute("aria-label", `${index + 1}번 문항${attempt.isAnswered(question.id) ? ", 응답 완료" : ", 미응답"}`);
+    button.classList.toggle("answered", answered);
+    button.setAttribute("aria-label", `${index + 1}번 문항${answered ? ", 응답 완료" : ", 미응답"}`);
     button.setAttribute("aria-current", index === currentQuestionIndex ? "step" : "false");
     button.addEventListener("click", () => renderQuestion(index));
     item.append(button);
@@ -97,7 +109,6 @@ function renderQuestion(index, focus = true) {
   heading.textContent = question.prompt;
   const form = document.getElementById("answer-form");
   form.replaceChildren();
-
   if (question.type === "short_answer") {
     const label = document.createElement("label");
     label.className = "visually-hidden";
@@ -110,10 +121,7 @@ function renderQuestion(index, focus = true) {
     input.value = value;
     input.placeholder = "답안을 입력하세요";
     input.maxLength = 10_000;
-    input.addEventListener("input", () => {
-      attempt.setAnswer(question.id, input.value);
-      updateProgress();
-    });
+    input.addEventListener("input", () => { attempt.setAnswer(question.id, input.value); updateProgress(); });
     form.append(label, input);
   } else {
     const inputType = question.type === "single_choice" ? "radio" : "checkbox";
@@ -122,10 +130,8 @@ function renderQuestion(index, focus = true) {
       form.append(buildChoice(question, choice, inputType, selected));
     }
   }
-
   document.getElementById("previous-button").disabled = index === 0;
-  const next = document.getElementById("next-button");
-  next.disabled = index === publicExam.questions.length - 1;
+  document.getElementById("next-button").disabled = index === publicExam.questions.length - 1;
   renderQuestionNavigation();
   if (focus) heading.focus();
 }
@@ -144,9 +150,7 @@ function startTimer() {
   timer.hidden = false;
   const tick = () => {
     const remaining = Math.max(0, Math.ceil((deadline - performance.now()) / 1000));
-    const minutes = Math.floor(remaining / 60);
-    const seconds = remaining % 60;
-    timer.textContent = `남은 시간 ${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+    timer.textContent = `남은 시간 ${String(Math.floor(remaining / 60)).padStart(2, "0")}:${String(remaining % 60).padStart(2, "0")}`;
     if (remaining === 0) {
       clearInterval(timerId);
       announce("시험 시간이 만료되었습니다.");
@@ -159,9 +163,7 @@ function startTimer() {
 }
 
 function openSubmitDialog(message) {
-  document.getElementById("submit-dialog-copy").textContent = message ?? (attempt.unansweredCount === 0
-    ? "모든 문항에 응답했습니다."
-    : `아직 답하지 않은 문항이 ${attempt.unansweredCount}개 있습니다.`);
+  document.getElementById("submit-dialog-copy").textContent = message ?? (attempt.unansweredCount === 0 ? "모든 문항에 응답했습니다." : `아직 답하지 않은 문항이 ${attempt.unansweredCount}개 있습니다.`);
   submitDialog.showModal();
 }
 
@@ -169,84 +171,122 @@ function statusLabel(status) {
   return { correct: "정답", incorrect: "오답", unanswered: "미응답", review_required: "검토 필요" }[status];
 }
 
-function renderResult(result) {
+function getStoredRecords() {
+  try { return JSON.parse(localStorage.getItem(`exam-report:${exam.id}`) || "[]"); }
+  catch { return []; }
+}
+
+function storeResult(result) {
+  const records = getStoredRecords();
+  records.push(makeAttemptRecord(candidate, result));
+  localStorage.setItem(`exam-report:${exam.id}`, JSON.stringify(records));
+  return records;
+}
+
+function renderReport(records) {
+  const report = buildExamReport(exam, records);
+  document.getElementById("report-count").textContent = `총 ${report.examineeCount}명`;
+  const summary = document.getElementById("wrong-summary");
+  if (report.highWrongRate.length === 0) summary.textContent = "현재 오답이 집계된 문항이 없습니다.";
+  else summary.replaceChildren(...report.highWrongRate.map((item) => {
+    const card = document.createElement("div");
+    card.innerHTML = `<span>${item.questionNumber}번</span><strong>${item.wrongRate}%</strong><small>${item.wrongCount}명 오답</small>`;
+    return card;
+  }));
+  document.getElementById("report-body").replaceChildren(...report.attempts.slice().reverse().map((record) => {
+    const row = document.createElement("tr");
+    const values = [new Date(record.submittedAt).toLocaleString("ko-KR"), record.candidate.name, record.candidate.employeeId, record.candidate.department || "-", `${record.score}/${record.maxScore}`, record.passed ? "합격" : "불합격"];
+    for (const value of values) { const cell = document.createElement("td"); cell.textContent = value; row.append(cell); }
+    row.lastElementChild.className = record.passed ? "status-correct" : "status-incorrect";
+    return row;
+  }));
+  return report;
+}
+
+function renderResult(result, records) {
+  const passed = result.score >= (exam.passingScore ?? result.maxScore * 0.8);
+  document.getElementById("candidate-result").textContent = `${candidate.name} · ${candidate.employeeId}${candidate.department ? ` · ${candidate.department}` : ""}`;
   document.getElementById("result-score").textContent = String(result.score);
   document.getElementById("result-max-score").textContent = `/ ${result.maxScore}점`;
+  const badge = document.getElementById("pass-badge");
+  badge.textContent = passed ? "합격" : "불합격";
+  badge.className = passed ? "pass" : "fail";
   const items = result.items.map((item, index) => {
-    const question = publicExam.questions[index];
     const li = document.createElement("li");
     const top = document.createElement("div");
     top.className = "result-item-top";
     const title = document.createElement("strong");
-    title.textContent = `${index + 1}. ${question.prompt}`;
+    title.textContent = `${index + 1}. ${publicExam.questions[index].prompt}`;
     const status = document.createElement("span");
     status.className = `status-${item.status}`;
     status.textContent = `${statusLabel(item.status)} · ${item.earnedScore}/${item.maxScore}점`;
     top.append(title, status);
     li.append(top);
-    if (item.explanation) {
-      const explanation = document.createElement("p");
-      explanation.className = "explanation";
-      explanation.textContent = `해설: ${item.explanation}`;
-      li.append(explanation);
-    }
     return li;
   });
   document.getElementById("result-items").replaceChildren(...items);
+  renderReport(records);
   showView("result-view");
   document.getElementById("result-title").focus({ preventScroll: true });
-  announce(`채점 완료. ${result.maxScore}점 만점에 ${result.score}점입니다.`);
+  announce(`채점 완료. ${result.maxScore}점 만점에 ${result.score}점, ${passed ? "합격" : "불합격"}입니다.`);
 }
 
 function finalizeSubmission() {
   if (timerId) clearInterval(timerId);
   timer.hidden = true;
   attempt.submit();
-  renderResult(attempt.grade());
+  const result = attempt.grade();
+  renderResult(result, storeResult(result));
 }
 
-function downloadResult() {
-  const result = attempt.result;
-  const exportData = {
-    schemaVersion: 1,
-    examId: result.examId,
-    examTitle: publicExam.title,
-    submittedAt: result.submittedAt,
-    score: result.score,
-    maxScore: result.maxScore,
-    items: result.items.map(({ questionId, status, earnedScore, maxScore }) => ({ questionId, status, earnedScore, maxScore }))
-  };
-  const url = URL.createObjectURL(new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" }));
+function downloadJson(data, filename) {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
   const link = document.createElement("a");
-  link.href = url;
-  link.download = `${exam.id}-result.json`;
-  link.click();
-  URL.revokeObjectURL(url);
+  link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url);
+}
+
+function downloadReport() {
+  downloadJson({ schemaVersion: 1, examTitle: exam.title, passingScore: exam.passingScore ?? getMaxScore(exam) * 0.8, generatedAt: new Date().toISOString(), ...buildExamReport(exam, getStoredRecords()) }, `${exam.id}-report.json`);
 }
 
 function reset() {
   if (timerId) clearInterval(timerId);
-  exam = null;
-  publicExam = null;
-  attempt = null;
+  exam = publicExam = attempt = candidate = null;
   fileInput.value = "";
   timer.hidden = true;
   showView("load-view");
-  fileInput.focus();
 }
 
 fileInput.addEventListener("change", () => loadSelectedFile(fileInput.files[0]));
-document.getElementById("start-button").addEventListener("click", () => {
-  attempt.start();
-  showView("exam-view");
-  renderQuestion(0);
-  updateProgress();
-  startTimer();
+document.getElementById("default-exam-button").addEventListener("click", () => prepareExam(defaultExam));
+document.getElementById("show-converter-button").addEventListener("click", () => { showView("converter-view"); document.getElementById("converter-title").focus(); });
+document.getElementById("convert-button").addEventListener("click", () => {
+  const errorBox = document.getElementById("converter-error");
+  try {
+    const converted = convertQuestionTable(document.getElementById("converter-source").value, {
+      title: document.getElementById("converter-exam-title").value,
+      durationMinutes: document.getElementById("converter-duration").value,
+      passingScore: document.getElementById("converter-passing-score").value,
+      scorePerQuestion: document.getElementById("converter-score").value
+    });
+    parseExamJson(JSON.stringify(converted));
+    errorBox.hidden = true;
+    downloadJson(converted, "converted-exam.json");
+  } catch (error) {
+    errorBox.textContent = error instanceof Error ? error.message : "문항을 변환할 수 없습니다.";
+    errorBox.hidden = false;
+  }
+});
+document.getElementById("candidate-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const formData = new FormData(event.currentTarget);
+  candidate = Object.fromEntries(formData);
+  attempt.start(); showView("exam-view"); renderQuestion(0); updateProgress(); startTimer();
 });
 document.getElementById("previous-button").addEventListener("click", () => renderQuestion(currentQuestionIndex - 1));
 document.getElementById("next-button").addEventListener("click", () => renderQuestion(currentQuestionIndex + 1));
 document.getElementById("submit-button").addEventListener("click", () => openSubmitDialog());
 document.getElementById("confirm-submit").addEventListener("click", finalizeSubmission);
-document.getElementById("download-button").addEventListener("click", downloadResult);
+document.getElementById("download-button").addEventListener("click", downloadReport);
 document.getElementById("print-button").addEventListener("click", () => window.print());
-for (const button of document.querySelectorAll(".reset-button")) button.addEventListener("click", reset);
+for (const button of document.querySelectorAll(".home-button")) button.addEventListener("click", reset);
