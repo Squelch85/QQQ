@@ -107,6 +107,9 @@ export function validateExam(candidate) {
   if (typeof candidate.showExplanations !== "boolean") {
     errors.push("showExplanations: 불리언이어야 합니다.");
   }
+  if (candidate.passingScore !== undefined && (typeof candidate.passingScore !== "number" || !Number.isFinite(candidate.passingScore) || candidate.passingScore < 0)) {
+    errors.push("passingScore: 0 이상의 유한한 숫자여야 합니다.");
+  }
   if (!Array.isArray(candidate.questions) || candidate.questions.length === 0) {
     errors.push("questions: 문항이 하나 이상 필요합니다.");
   } else if (candidate.questions.length > MAX_QUESTIONS) {
@@ -160,6 +163,7 @@ export function toPublicExam(exam) {
     instructions: exam.instructions ?? "",
     durationMinutes: exam.durationMinutes,
     expirationPolicy: exam.expirationPolicy,
+    passingScore: exam.passingScore,
     questions: exam.questions.map(({ scoring, explanation, ...question }) => ({
       ...question,
       choices: question.choices?.map((choice) => ({ ...choice }))
