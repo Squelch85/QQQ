@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildExamReport, createReportFile, makeAttemptRecord, parseReportJson } from "../src/report.js";
+import { clearExamReportRecords, getExamReportStorageKey, readExamReportRecords } from "../src/report-storage.js";
 import { validExam } from "./fixtures.js";
 
 test("응시자별 합격 여부와 문항 ID 기준 오답률 및 전체 통계를 집계한다", () => {
@@ -46,4 +47,20 @@ test("저장한 누적 리포트 파일을 다시 파싱한다", () => {
   assert.equal(parsed.schemaVersion, 1);
   assert.equal(parsed.examTitle, "테스트 시험");
   assert.equal(parsed.generatedAt, "2026-06-08T00:00:00.000Z");
+});
+
+test("시험지 JSON 재로드를 위해 시험별 누적 결과 저장소를 초기화한다", () => {
+  const storage = new Map();
+  const storageAdapter = {
+    getItem: (key) => storage.get(key) ?? null,
+    removeItem: (key) => storage.delete(key),
+    setItem: (key, value) => storage.set(key, value)
+  };
+  const key = getExamReportStorageKey("exam-a");
+  storage.set(key, JSON.stringify([{ candidate: { name: "기존 수검자" } }]));
+
+  clearExamReportRecords(storageAdapter, "exam-a");
+
+  assert.equal(storage.has(key), false);
+  assert.deepEqual(readExamReportRecords(storageAdapter, "exam-a"), []);
 });

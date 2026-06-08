@@ -3,6 +3,7 @@ import { convertQuestionTable } from "./converter.js";
 import { defaultExam } from "./default-exam.js";
 import { getMaxScore, MAX_FILE_BYTES, parseExamJson, toPublicExam } from "./exam.js";
 import { buildExamReport, createReportFile, makeAttemptRecord, parseReportJson } from "./report.js";
+import { appendExamReportRecord, clearExamReportRecords, readExamReportRecords } from "./report-storage.js";
 
 const viewIds = ["load-view", "converter-view", "ready-view", "exam-view", "result-view", "report-view"];
 const views = viewIds.map((id) => document.getElementById(id));
@@ -33,8 +34,9 @@ function formatDuration(minutes) {
   return minutes === 0 ? "시간 제한 없음" : `${minutes}분`;
 }
 
-function prepareExam(nextExam) {
+function prepareExam(nextExam, { resetRecords = false } = {}) {
   exam = structuredClone(nextExam);
+  if (resetRecords) clearExamReportRecords(localStorage, exam.id);
   publicExam = toPublicExam(exam);
   attempt = new Attempt(exam);
   document.getElementById("exam-title").textContent = publicExam.title;
@@ -51,7 +53,7 @@ async function loadSelectedFile(file) {
   if (!file) return;
   try {
     if (file.size > MAX_FILE_BYTES) throw new Error(`시험지 파일은 ${MAX_FILE_BYTES / 1024 / 1024}MB 이하여야 합니다.`);
-    prepareExam(parseExamJson(await file.text()));
+    prepareExam(parseExamJson(await file.text()), { resetRecords: true });
   } catch (error) {
     fileError.textContent = error instanceof Error ? error.message : "시험지를 열 수 없습니다.";
     fileError.hidden = false;
@@ -172,15 +174,11 @@ function statusLabel(status) {
 }
 
 function getStoredRecords() {
-  try { return JSON.parse(localStorage.getItem(`exam-report:${exam.id}`) || "[]"); }
-  catch { return []; }
+  return readExamReportRecords(localStorage, exam.id);
 }
 
 function storeResult(result) {
-  const records = getStoredRecords();
-  records.push(makeAttemptRecord(candidate, result, exam));
-  localStorage.setItem(`exam-report:${exam.id}`, JSON.stringify(records));
-  return records;
+  return appendExamReportRecord(localStorage, exam.id, makeAttemptRecord(candidate, result, exam));
 }
 
 function renderReportData(report, target = "result") {
