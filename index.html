@@ -70,7 +70,15 @@
           <label>사번 <span aria-hidden="true">*</span><input id="candidate-id" name="employeeId" required maxlength="50"></label>
           <label>부서<input id="candidate-department" name="department" maxlength="80"></label>
         </div>
-        <p class="privacy-note">입력 정보와 시험 결과는 이 브라우저에 자동 누적되며, 제출할 때 최신 누적 CSV도 자동 저장됩니다.</p>
+        <p class="privacy-note">입력 정보와 시험 결과는 시험 ID와 버전별로 이 브라우저에 자동 누적되며, 제출할 때 최신 누적 CSV도 자동 저장됩니다.</p>
+        <div class="history-management" aria-labelledby="history-management-title">
+          <h3 id="history-management-title">시험 기록 관리</h3>
+          <p id="history-storage-summary">저장된 기록을 확인하는 중입니다.</p>
+          <div class="compact-actions">
+            <button id="backup-clear-button" class="secondary" type="button">CSV 백업 후 현재 기록 삭제</button>
+            <button id="clear-all-button" class="text-button danger" type="button">전체 시험 기록 삭제</button>
+          </div>
+        </div>
         <button id="start-button" class="primary" type="submit">정보 확인 후 시험 시작 <span aria-hidden="true">→</span></button>
         <button class="text-button home-button" type="button">다른 시험 선택</button>
       </form>
@@ -104,7 +112,9 @@
       <ol id="result-items" class="result-items"></ol>
 
       <section class="report-section" aria-labelledby="report-title">
-        <div class="report-heading"><div><p class="eyebrow">SUMMARY</p><h2 id="report-title">누적 응시 리포트</h2></div><strong id="report-count"></strong></div>
+        <div class="report-heading"><div><p class="eyebrow">SUMMARY</p><h2 id="report-title">누적 응시 리포트</h2><p id="report-version" class="report-version"></p></div><strong id="report-count"></strong></div>
+        <label class="report-mode-label">통계 집계 기준<select id="report-mode"><option value="latestPerEmployee">응시자별 최신 결과</option><option value="bestPerEmployee">응시자별 최고 결과</option><option value="allAttempts">전체 응시</option></select></label>
+        <p id="report-storage-status" class="storage-status" role="status"></p>
         <div class="report-metrics"><div><span>평균 점수</span><strong id="report-average"></strong></div><div><span>합격률</span><strong id="report-pass-rate"></strong></div></div>
         <div id="report-wrong-summary" class="wrong-summary"></div>
         <div class="table-wrap"><table><thead><tr><th>응시일시</th><th>성명</th><th>사번</th><th>부서</th><th>점수</th><th>합격 여부</th></tr></thead><tbody id="report-body"></tbody></table></div>
@@ -121,7 +131,7 @@
       <h1 id="loaded-report-title" tabindex="-1"></h1>
       <p id="loaded-report-generated-at" class="candidate-result"></p>
       <section class="report-section" aria-labelledby="loaded-report-summary-title">
-        <div class="report-heading"><div><p class="eyebrow">SUMMARY</p><h2 id="loaded-report-summary-title">전체 응시 결과 통계</h2></div><strong id="loaded-report-count"></strong></div>
+        <div class="report-heading"><div><p class="eyebrow">SUMMARY</p><h2 id="loaded-report-summary-title">전체 응시 결과 통계</h2><p id="loaded-report-version" class="report-version"></p></div><strong id="loaded-report-count"></strong></div>
         <div class="report-metrics"><div><span>평균 점수</span><strong id="loaded-report-average"></strong></div><div><span>합격률</span><strong id="loaded-report-pass-rate"></strong></div></div>
         <div id="loaded-report-wrong-summary" class="wrong-summary"></div>
         <div class="table-wrap"><table><thead><tr><th>응시일시</th><th>성명</th><th>사번</th><th>부서</th><th>점수</th><th>합격 여부</th></tr></thead><tbody id="loaded-report-body"></tbody></table></div>

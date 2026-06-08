@@ -3,7 +3,7 @@ import { convertQuestionTable } from "./converter.js";
 import { defaultExam } from "./default-exam.js";
 import { getMaxScore, MAX_FILE_BYTES, parseExamJson, toPublicExam } from "./exam.js";
 import { buildExamReport, createReportCsv, makeAttemptRecord, parseReportCsv } from "./report.js";
-import { appendExamReportRecord, readExamReportCsv, readExamReportRecords } from "./report-storage.js";
+import { appendExamReportRecord, clearAllExamReportRecords, clearExamReportRecords, getReportStorageUsage, readExamReportCsv, readExamReportRecords } from "./report-storage.js";
 
 const viewIds = ["load-view", "converter-view", "ready-view", "exam-view", "result-view", "report-view"];
 const views = viewIds.map((id) => document.getElementById(id));
@@ -26,6 +26,7 @@ let candidate = null;
 let currentQuestionIndex = 0;
 let timerId = null;
 let deadline = null;
+let reportMode = "latestPerEmployee";
 
 function showView(id) {
   for (const view of views) view.hidden = view.id !== id;
@@ -47,9 +48,10 @@ function prepareExam(nextExam) {
   attempt = new Attempt(exam);
   document.getElementById("exam-title").textContent = publicExam.title;
   const passingScore = exam.passingScore ?? getMaxScore(exam) * 0.8;
-  document.getElementById("exam-meta").textContent = `${publicExam.questions.length}문항 · ${formatDuration(publicExam.durationMinutes)} · 합격 ${passingScore}점 이상`;
+  document.getElementById("exam-meta").textContent = `버전 ${publicExam.revision} · ${publicExam.questions.length}문항 · ${formatDuration(publicExam.durationMinutes)} · 합격 ${passingScore}점 이상`;
   document.getElementById("exam-instructions").textContent = publicExam.instructions || "별도 유의사항이 없습니다.";
   document.getElementById("candidate-form").reset();
+  updateHistoryStorageSummary();
   showView("ready-view");
   document.getElementById("exam-title").focus({ preventScroll: true });
 }
@@ -189,7 +191,8 @@ function storeResult(result) {
 
 function renderReportData(report, target = "result") {
   const prefix = target === "result" ? "report" : "loaded-report";
-  document.getElementById(`${prefix}-count`).textContent = `총 ${report.examineeCount}명`;
+  document.getElementById(`${prefix}-count`).textContent = `선택 ${report.examineeCount}건 · 전체 ${report.totalAttemptCount}건 · 고유 ${report.uniqueExamineeCount}명`;
+  document.getElementById(`${prefix}-version`).textContent = `시험 ID ${report.examId} · 버전 ${report.examRevision}`;
   document.getElementById(`${prefix}-average`).textContent = `${report.averageScore}점`;
   document.getElementById(`${prefix}-pass-rate`).textContent = `${report.passRate}% (${report.passedCount}명)`;
   const summary = document.getElementById(`${prefix}-wrong-summary`);
@@ -217,7 +220,7 @@ function renderReportData(report, target = "result") {
 }
 
 function renderReport(records) {
-  const report = buildExamReport(exam, records);
+  const report = buildExamReport(exam, records, reportMode);
   renderReportData(report);
   return report;
 }
@@ -257,7 +260,45 @@ function finalizeSubmission() {
   const result = attempt.grade();
   const reportState = storeResult(result);
   downloadReport(reportState.csv);
+  const status = document.getElementById("report-storage-status");
+  if (!reportState.stored) status.textContent = "브라우저 저장소에 보관하지 못했습니다. 자동 다운로드된 CSV를 반드시 보관하세요.";
+  else if (reportState.usage.warning) status.textContent = `저장 이력이 ${reportState.usage.recordCount}건, ${formatBytes(reportState.usage.bytes)}입니다. CSV 백업 후 이전 기록 정리를 권장합니다.`;
+  else status.textContent = `브라우저 저장 완료 · ${reportState.usage.recordCount}건 · ${formatBytes(reportState.usage.bytes)}`;
   renderResult(result, reportState.records);
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+function updateHistoryStorageSummary() {
+  const summary = document.getElementById("history-storage-summary");
+  if (!summary || !exam) return;
+  const records = getStoredRecords();
+  const csv = readExamReportCsv(reportStorage, exam) || (records.length ? createReportCsv(exam, records) : "");
+  const usage = getReportStorageUsage(csv, records.length);
+  summary.textContent = `${exam.title} · 버전 ${exam.revision} · ${records.length}건 · ${formatBytes(usage.bytes)}`;
+  document.getElementById("backup-clear-button").disabled = records.length === 0;
+}
+
+function backupAndClearCurrentHistory() {
+  const records = getStoredRecords();
+  if (records.length === 0) return;
+  downloadReport();
+  const message = `${exam.title} (ID: ${exam.id}, 버전: ${exam.revision})의 응시 기록 ${records.length}건을 삭제합니다. CSV 다운로드가 시작되었는지 확인하세요. 삭제 후 복구할 수 없습니다.`;
+  if (!window.confirm(message)) return;
+  const cleared = clearExamReportRecords(reportStorage, exam.id, exam.revision);
+  announce(cleared ? "현재 시험 기록을 삭제했습니다." : "시험 기록을 삭제하지 못했습니다.");
+  updateHistoryStorageSummary();
+}
+
+function clearAllHistory() {
+  if (!window.confirm("이 브라우저의 모든 시험 버전 기록을 삭제합니다. 개별 CSV로 백업하지 않은 기록은 복구할 수 없습니다.")) return;
+  const result = clearAllExamReportRecords(reportStorage);
+  announce(result.cleared ? `시험 기록 저장 키 ${result.count}개를 삭제했습니다.` : "전체 시험 기록을 삭제하지 못했습니다.");
+  updateHistoryStorageSummary();
 }
 
 function downloadJson(data, filename) {
@@ -338,5 +379,8 @@ document.getElementById("next-button").addEventListener("click", () => renderQue
 document.getElementById("submit-button").addEventListener("click", () => openSubmitDialog());
 document.getElementById("confirm-submit").addEventListener("click", finalizeSubmission);
 document.getElementById("download-button").addEventListener("click", () => downloadReport());
+document.getElementById("report-mode").addEventListener("change", (event) => { reportMode = event.currentTarget.value; renderReport(getStoredRecords()); });
+document.getElementById("backup-clear-button").addEventListener("click", backupAndClearCurrentHistory);
+document.getElementById("clear-all-button").addEventListener("click", clearAllHistory);
 document.getElementById("print-button").addEventListener("click", () => window.print());
 for (const button of document.querySelectorAll(".home-button")) button.addEventListener("click", reset);

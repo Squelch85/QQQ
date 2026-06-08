@@ -100,6 +100,7 @@ function validateExam(candidate) {
     errors.push(`schemaVersion: 지원 버전은 ${EXAM_SCHEMA_VERSION}입니다.`);
   }
   validateText(candidate.id, "id", errors);
+  if (!Number.isInteger(candidate.revision) || candidate.revision < 1) errors.push("revision: 1 이상의 정수여야 합니다.");
   validateText(candidate.title, "title", errors);
   validateText(candidate.instructions, "instructions", errors, { required: false });
 
@@ -153,6 +154,7 @@ function parseExamJson(text) {
   let candidate;
   try {
     candidate = JSON.parse(text);
+    if (candidate && candidate.revision === undefined) candidate.revision = 1;
   } catch {
     throw new Error("올바른 JSON 형식이 아닙니다.");
   }
@@ -164,6 +166,7 @@ function parseExamJson(text) {
 function toPublicExam(exam) {
   return {
     id: exam.id,
+    revision: exam.revision,
     title: exam.title,
     instructions: exam.instructions ?? "",
     durationMinutes: exam.durationMinutes,
@@ -438,6 +441,7 @@ function convertQuestionTable(text, options = {}) {
   return {
     schemaVersion: 1,
     id: options.id || `converted-exam-${new Date().toISOString().slice(0, 10)}`,
+    revision: Number(options.revision ?? 1),
     title: options.title || "검사원 평가 시험",
     instructions: options.instructions || "각 문항을 읽고 가장 알맞은 답을 선택하세요.",
     durationMinutes: Number(options.durationMinutes ?? 30),
@@ -452,6 +456,7 @@ function convertQuestionTable(text, options = {}) {
 const defaultExam = {
   "schemaVersion": 1,
   "id": "inspector-evaluation-2026",
+  "revision": 1,
   "title": "검사원 평가 시험",
   "instructions": "각 문항을 읽고 가장 알맞은 답을 하나 선택하세요. 제출 후에는 답안을 변경할 수 없습니다.",
   "durationMinutes": 30,
@@ -1543,14 +1548,48 @@ const defaultExam = {
 };
 
 // ---- src/report.js ----
-const REPORT_SCHEMA_VERSION = 1;
-const CSV_FIXED_HEADERS = ["리포트 버전", "생성일시", "시험 ID", "시험 제목", "합격 점수", "응시일시", "성명", "사번", "부서", "점수", "만점", "합격 여부"];
+const REPORT_SCHEMA_VERSION = 2;
+const LEGACY_CSV_FIXED_HEADERS = ["리포트 버전", "생성일시", "시험 ID", "시험 제목", "합격 점수", "응시일시", "성명", "사번", "부서", "점수", "만점", "합격 여부"];
+const CSV_FIXED_HEADERS = ["리포트 버전", "생성일시", "시험 ID", "시험 버전", "시험 제목", "합격 점수", "응시 ID", "응시일시", "성명", "사번", "부서", "점수", "만점", "합격 여부"];
 const QUESTION_HEADER_PREFIX = "문항 결과 ";
 const STATUS_LABELS = { correct: "정답", incorrect: "오답", unanswered: "미응답", review_required: "검토 필요" };
 const STATUS_VALUES = new Map(Object.entries(STATUS_LABELS).map(([value, label]) => [label, value]));
+const REPORT_MODES = new Set(["allAttempts", "latestPerEmployee", "bestPerEmployee"]);
 
 function roundRate(value) {
   return Math.round(value * 10) / 10;
+}
+
+function compareAttempts(left, right) {
+  const timeDifference = Date.parse(left.submittedAt) - Date.parse(right.submittedAt);
+  if (Number.isFinite(timeDifference) && timeDifference !== 0) return timeDifference;
+  return String(left.attemptId ?? "").localeCompare(String(right.attemptId ?? ""));
+}
+
+function candidateKey(record) {
+  return record.candidate?.employeeId?.trim() || `name:${record.candidate?.name?.trim() || record.attemptId}`;
+}
+
+function selectReportRecords(records, mode = "allAttempts") {
+  if (!REPORT_MODES.has(mode)) throw new Error(`지원하지 않는 리포트 집계 방식입니다: ${mode}`);
+  if (mode === "allAttempts") return [...records];
+
+  const selected = new Map();
+  for (const record of records) {
+    const key = candidateKey(record);
+    const current = selected.get(key);
+    if (!current) {
+      selected.set(key, record);
+      continue;
+    }
+    if (mode === "latestPerEmployee" && compareAttempts(current, record) <= 0) selected.set(key, record);
+    if (mode === "bestPerEmployee") {
+      const currentRate = current.maxScore ? current.score / current.maxScore : 0;
+      const nextRate = record.maxScore ? record.score / record.maxScore : 0;
+      if (nextRate > currentRate || (nextRate === currentRate && compareAttempts(current, record) <= 0)) selected.set(key, record);
+    }
+  }
+  return [...selected.values()].sort(compareAttempts);
 }
 
 function getQuestionDefinitions(exam, records) {
@@ -1573,9 +1612,10 @@ function getQuestionDefinitions(exam, records) {
   return [...definitions.values()];
 }
 
-function buildExamReport(exam, records) {
+function buildExamReport(exam, records, mode = "latestPerEmployee") {
   const passingScore = exam.passingScore ?? 80;
-  const attempts = records.map((record) => {
+  const selectedRecords = selectReportRecords(records, mode);
+  const attempts = selectedRecords.map((record) => {
     const maxScore = record.maxScore || 100;
     return {
       ...record,
@@ -1584,10 +1624,10 @@ function buildExamReport(exam, records) {
     };
   });
 
-  const questionStats = getQuestionDefinitions(exam, records).map((question) => {
+  const questionStats = getQuestionDefinitions(exam, selectedRecords).map((question) => {
     let attemptCount = 0;
     let wrongCount = 0;
-    for (const record of records) {
+    for (const record of selectedRecords) {
       const item = record.items?.find((candidate) => candidate.questionId === question.questionId);
       if (!item) continue;
       attemptCount += 1;
@@ -1606,11 +1646,16 @@ function buildExamReport(exam, records) {
     .slice(0, 5);
   const passedCount = attempts.filter((attempt) => attempt.passed).length;
   const averageScore = attempts.length === 0 ? 0 : roundRate(attempts.reduce((sum, attempt) => sum + attempt.scoreRate, 0) / attempts.length);
+  const uniqueExamineeCount = new Set(records.map(candidateKey)).size;
 
   return {
     examId: exam.id,
+    examRevision: exam.revision ?? 1,
     examTitle: exam.title,
     passingScore,
+    mode,
+    totalAttemptCount: records.length,
+    uniqueExamineeCount,
     examineeCount: attempts.length,
     passedCount,
     passRate: attempts.length === 0 ? 0 : roundRate((passedCount / attempts.length) * 100),
@@ -1621,9 +1666,18 @@ function buildExamReport(exam, records) {
   };
 }
 
+function createAttemptId(exam, candidate, submittedAt) {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  const identity = `${exam?.id ?? "exam"}-${exam?.revision ?? 1}-${candidate.employeeId || candidate.name}-${submittedAt}`;
+  let hash = 2166136261;
+  for (const character of identity) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+  return `attempt-${submittedAt}-${(hash >>> 0).toString(16)}`;
+}
+
 function makeAttemptRecord(candidate, result, exam) {
   const questionsById = new Map((exam?.questions ?? []).map((question) => [question.id, question]));
   return {
+    attemptId: createAttemptId(exam, candidate, result.submittedAt),
     candidate: { name: candidate.name, employeeId: candidate.employeeId, department: candidate.department || "" },
     submittedAt: result.submittedAt,
     score: result.score,
@@ -1664,8 +1718,10 @@ function createReportCsv(exam, records, generatedAt = new Date().toISOString()) 
       REPORT_SCHEMA_VERSION,
       generatedAt,
       protectSpreadsheetFormula(exam.id),
+      exam.revision ?? 1,
       protectSpreadsheetFormula(exam.title),
       passingScore,
+      protectSpreadsheetFormula(record.attemptId),
       record.submittedAt,
       protectSpreadsheetFormula(record.candidate?.name),
       protectSpreadsheetFormula(record.candidate?.employeeId),
@@ -1707,7 +1763,7 @@ function parseCsvRows(text) {
       cell = "";
     } else cell += character;
   }
-  if (quoted) throw new Error("CSV 따옴표가 올바르게 닫히지 않았습니다.");
+  if (quoted) throw new Error("리포트 CSV의 큰따옴표가 닫히지 않았습니다.");
   if (cell !== "" || row.length > 0) {
     row.push(cell);
     if (row.some((value) => value !== "")) rows.push(row);
@@ -1721,13 +1777,8 @@ function parseRequiredNumber(value, label) {
   return number;
 }
 
-function parseReportCsv(text) {
-  const rows = parseCsvRows(text);
-  if (rows.length < 2) throw new Error("리포트 CSV에 응시 결과가 없습니다.");
-  const [headers, ...dataRows] = rows;
-  if (!CSV_FIXED_HEADERS.every((header, index) => headers[index] === header)) throw new Error("지원하는 누적 리포트 CSV 형식이 아닙니다.");
-
-  const questions = headers.slice(CSV_FIXED_HEADERS.length).map((header, index) => {
+function parseQuestions(headers, fixedHeaderCount) {
+  return headers.slice(fixedHeaderCount).map((header, index) => {
     const match = header.match(/^문항 결과 \[([^\]]+)\] (.+)$/s);
     if (!match) throw new Error(`${index + 1}번째 문항 열 형식이 올바르지 않습니다.`);
     let questionId;
@@ -1738,57 +1789,83 @@ function parseReportCsv(text) {
     }
     return { id: questionId, prompt: match[2] };
   });
+}
 
+function parseReportCsv(text) {
+  const rows = parseCsvRows(text);
+  if (rows.length < 2) throw new Error("리포트 CSV에 응시 결과가 없습니다.");
+  const [headers, ...dataRows] = rows;
+  const currentFormat = CSV_FIXED_HEADERS.every((header, index) => headers[index] === header);
+  const legacyFormat = LEGACY_CSV_FIXED_HEADERS.every((header, index) => headers[index] === header);
+  if (!currentFormat && !legacyFormat) throw new Error("지원하는 누적 리포트 CSV 형식이 아닙니다.");
+
+  const fixedHeaders = currentFormat ? CSV_FIXED_HEADERS : LEGACY_CSV_FIXED_HEADERS;
+  const questions = parseQuestions(headers, fixedHeaders.length);
   const first = dataRows[0];
   const schemaVersion = parseRequiredNumber(first[0], "리포트 버전");
-  if (schemaVersion !== REPORT_SCHEMA_VERSION) throw new Error(`지원하는 리포트 버전은 ${REPORT_SCHEMA_VERSION}입니다.`);
+  if (currentFormat && schemaVersion !== REPORT_SCHEMA_VERSION) throw new Error(`지원하는 리포트 버전은 ${REPORT_SCHEMA_VERSION}입니다.`);
+  if (legacyFormat && schemaVersion !== 1) throw new Error("지원하는 기존 리포트 버전은 1입니다.");
+
   const generatedAt = first[1];
+  const indexes = currentFormat
+    ? { revision: 3, title: 4, passingScore: 5, attemptId: 6, submittedAt: 7, name: 8, employeeId: 9, department: 10, score: 11, maxScore: 12 }
+    : { title: 3, passingScore: 4, submittedAt: 5, name: 6, employeeId: 7, department: 8, score: 9, maxScore: 10 };
   const exam = {
     id: restoreSpreadsheetFormula(first[2]),
-    title: restoreSpreadsheetFormula(first[3]),
-    passingScore: parseRequiredNumber(first[4], "합격 점수"),
+    revision: currentFormat ? parseRequiredNumber(first[indexes.revision], "시험 버전") : 1,
+    title: restoreSpreadsheetFormula(first[indexes.title]),
+    passingScore: parseRequiredNumber(first[indexes.passingScore], "합격 점수"),
     questions
   };
   if (!exam.title.trim()) throw new Error("리포트에 시험 제목이 없습니다.");
 
   const records = dataRows.map((values, rowIndex) => {
     if (values.length !== headers.length) throw new Error(`${rowIndex + 2}행의 열 개수가 헤더와 다릅니다.`);
-    if (Number(values[0]) !== schemaVersion || values[1] !== generatedAt || restoreSpreadsheetFormula(values[2]) !== exam.id || restoreSpreadsheetFormula(values[3]) !== exam.title || Number(values[4]) !== exam.passingScore) {
+    const sameRevision = !currentFormat || Number(values[indexes.revision]) === exam.revision;
+    if (Number(values[0]) !== schemaVersion || values[1] !== generatedAt || restoreSpreadsheetFormula(values[2]) !== exam.id || !sameRevision || restoreSpreadsheetFormula(values[indexes.title]) !== exam.title || Number(values[indexes.passingScore]) !== exam.passingScore) {
       throw new Error(`${rowIndex + 2}행의 리포트 정보가 첫 번째 응시 결과와 다릅니다.`);
     }
     const items = questions.flatMap((question, questionIndex) => {
-      const label = values[CSV_FIXED_HEADERS.length + questionIndex];
+      const label = values[fixedHeaders.length + questionIndex];
       if (!label) return [];
       const status = STATUS_VALUES.get(label);
       if (!status) throw new Error(`${rowIndex + 2}행의 문항 결과 '${label}'을(를) 지원하지 않습니다.`);
       return [{ questionId: question.id, status, prompt: question.prompt }];
     });
+    const submittedAt = values[indexes.submittedAt];
     return {
-      submittedAt: values[5],
+      attemptId: currentFormat ? restoreSpreadsheetFormula(values[indexes.attemptId]) : `legacy-${rowIndex + 1}-${submittedAt}`,
+      submittedAt,
       candidate: {
-        name: restoreSpreadsheetFormula(values[6]),
-        employeeId: restoreSpreadsheetFormula(values[7]),
-        department: restoreSpreadsheetFormula(values[8])
+        name: restoreSpreadsheetFormula(values[indexes.name]),
+        employeeId: restoreSpreadsheetFormula(values[indexes.employeeId]),
+        department: restoreSpreadsheetFormula(values[indexes.department])
       },
-      score: parseRequiredNumber(values[9], `${rowIndex + 2}행 점수`),
-      maxScore: parseRequiredNumber(values[10], `${rowIndex + 2}행 만점`),
+      score: parseRequiredNumber(values[indexes.score], `${rowIndex + 2}행 점수`),
+      maxScore: parseRequiredNumber(values[indexes.maxScore], `${rowIndex + 2}행 만점`),
       items
     };
   });
 
-  return { schemaVersion, generatedAt, ...buildExamReport(exam, records) };
+  return { schemaVersion, generatedAt, ...buildExamReport(exam, records, "allAttempts") };
 }
 
 // ---- src/report-storage.js ----
 const REPORT_STORAGE_PREFIX = "exam-report:";
+const STORAGE_WARNING_RECORDS = 1_000;
+const STORAGE_WARNING_BYTES = 2 * 1024 * 1024;
 
-function getExamReportStorageKey(examId) {
+function getExamReportStorageKey(examId, revision = 1) {
+  return `${REPORT_STORAGE_PREFIX}${examId}:${revision}`;
+}
+
+function getLegacyExamReportStorageKey(examId) {
   return `${REPORT_STORAGE_PREFIX}${examId}`;
 }
 
-function readStoredValue(storage, examId) {
+function readStoredValue(storage, key) {
   try {
-    return storage?.getItem(getExamReportStorageKey(examId)) || "";
+    return storage?.getItem(key) || "";
   } catch {
     return "";
   }
@@ -1803,54 +1880,128 @@ function readLegacyJsonRecords(value) {
   }
 }
 
+function reportMatchesExam(report, exam) {
+  const reportQuestions = report.questionStats.map(({ questionId, prompt }) => [questionId, prompt]);
+  const examQuestions = exam.questions.map(({ id, prompt }) => [id, prompt]);
+  return report.examId === exam.id
+    && report.examRevision === (exam.revision ?? 1)
+    && report.examTitle === exam.title
+    && report.passingScore === (exam.passingScore ?? 80)
+    && JSON.stringify(reportQuestions) === JSON.stringify(examQuestions);
+}
+
+function migrateLegacyStorage(storage, exam) {
+  if (!storage || (exam.revision ?? 1) !== 1) return "";
+  const legacyKey = getLegacyExamReportStorageKey(exam.id);
+  const value = readStoredValue(storage, legacyKey);
+  if (!value) return "";
+
+  let csv = value;
+  if (value.trimStart().startsWith("[")) csv = createReportCsv(exam, readLegacyJsonRecords(value));
+  else {
+    try {
+      const report = parseReportCsv(value);
+      if (!reportMatchesExam(report, exam)) return "";
+      csv = createReportCsv(exam, report.attempts);
+    } catch {
+      return "";
+    }
+  }
+
+  try {
+    storage.setItem(getExamReportStorageKey(exam.id, exam.revision), csv);
+    storage.removeItem(legacyKey);
+    return csv;
+  } catch {
+    return value;
+  }
+}
+
+function readExamValue(storage, exam) {
+  const key = getExamReportStorageKey(exam.id, exam.revision);
+  return readStoredValue(storage, key) || migrateLegacyStorage(storage, exam);
+}
+
 function readExamReportCsv(storage, exam) {
-  const value = readStoredValue(storage, exam.id);
+  const value = readExamValue(storage, exam);
   if (!value || value.trimStart().startsWith("[")) return "";
   try {
     const report = parseReportCsv(value);
-    return report.examId === exam.id ? value : "";
+    return reportMatchesExam(report, exam) ? value : "";
   } catch {
     return "";
   }
 }
 
 function readExamReportRecords(storage, exam) {
-  const value = readStoredValue(storage, exam.id);
+  const value = readExamValue(storage, exam);
   if (!value) return [];
   if (value.trimStart().startsWith("[")) return readLegacyJsonRecords(value);
   try {
     const report = parseReportCsv(value);
-    return report.examId === exam.id ? report.attempts : [];
+    return reportMatchesExam(report, exam) ? report.attempts : [];
   } catch {
     return [];
   }
 }
 
+function storageErrorType(error) {
+  if (error?.name === "QuotaExceededError") return "quota_exceeded";
+  if (error?.name === "SecurityError") return "access_denied";
+  return "storage_unavailable";
+}
+
+function getReportStorageUsage(csv, recordCount) {
+  const bytes = new TextEncoder().encode(csv).byteLength;
+  return {
+    bytes,
+    recordCount,
+    warning: recordCount >= STORAGE_WARNING_RECORDS || bytes >= STORAGE_WARNING_BYTES
+  };
+}
+
 function writeExamReportRecords(storage, exam, records, generatedAt) {
   const csv = createReportCsv(exam, records, generatedAt);
-  if (!storage) return { csv, stored: false };
+  const usage = getReportStorageUsage(csv, records.length);
+  if (!storage) return { csv, stored: false, errorType: "storage_unavailable", usage };
   try {
-    storage.setItem(getExamReportStorageKey(exam.id), csv);
-    return { csv, stored: true };
-  } catch {
-    return { csv, stored: false };
+    storage.setItem(getExamReportStorageKey(exam.id, exam.revision), csv);
+    return { csv, stored: true, errorType: null, usage };
+  } catch (error) {
+    return { csv, stored: false, errorType: storageErrorType(error), usage };
   }
 }
 
 function appendExamReportRecord(storage, exam, record, generatedAt) {
   const records = readExamReportRecords(storage, exam);
   records.push(record);
-  const { csv, stored } = writeExamReportRecords(storage, exam, records, generatedAt);
-  return { records, csv, stored };
+  const state = writeExamReportRecords(storage, exam, records, generatedAt);
+  return { records, ...state };
 }
 
-function clearExamReportRecords(storage, examId) {
+function clearExamReportRecords(storage, examId, revision = 1) {
   if (!storage) return false;
   try {
-    storage.removeItem(getExamReportStorageKey(examId));
+    storage.removeItem(getExamReportStorageKey(examId, revision));
+    if (revision === 1) storage.removeItem(getLegacyExamReportStorageKey(examId));
     return true;
   } catch {
     return false;
+  }
+}
+
+function clearAllExamReportRecords(storage) {
+  if (!storage) return { cleared: false, count: 0 };
+  try {
+    const keys = [];
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (key?.startsWith(REPORT_STORAGE_PREFIX)) keys.push(key);
+    }
+    for (const key of keys) storage.removeItem(key);
+    return { cleared: true, count: keys.length };
+  } catch {
+    return { cleared: false, count: 0 };
   }
 }
 
@@ -1876,6 +2027,7 @@ let candidate = null;
 let currentQuestionIndex = 0;
 let timerId = null;
 let deadline = null;
+let reportMode = "latestPerEmployee";
 
 function showView(id) {
   for (const view of views) view.hidden = view.id !== id;
@@ -1897,9 +2049,10 @@ function prepareExam(nextExam) {
   attempt = new Attempt(exam);
   document.getElementById("exam-title").textContent = publicExam.title;
   const passingScore = exam.passingScore ?? getMaxScore(exam) * 0.8;
-  document.getElementById("exam-meta").textContent = `${publicExam.questions.length}문항 · ${formatDuration(publicExam.durationMinutes)} · 합격 ${passingScore}점 이상`;
+  document.getElementById("exam-meta").textContent = `버전 ${publicExam.revision} · ${publicExam.questions.length}문항 · ${formatDuration(publicExam.durationMinutes)} · 합격 ${passingScore}점 이상`;
   document.getElementById("exam-instructions").textContent = publicExam.instructions || "별도 유의사항이 없습니다.";
   document.getElementById("candidate-form").reset();
+  updateHistoryStorageSummary();
   showView("ready-view");
   document.getElementById("exam-title").focus({ preventScroll: true });
 }
@@ -2039,7 +2192,8 @@ function storeResult(result) {
 
 function renderReportData(report, target = "result") {
   const prefix = target === "result" ? "report" : "loaded-report";
-  document.getElementById(`${prefix}-count`).textContent = `총 ${report.examineeCount}명`;
+  document.getElementById(`${prefix}-count`).textContent = `선택 ${report.examineeCount}건 · 전체 ${report.totalAttemptCount}건 · 고유 ${report.uniqueExamineeCount}명`;
+  document.getElementById(`${prefix}-version`).textContent = `시험 ID ${report.examId} · 버전 ${report.examRevision}`;
   document.getElementById(`${prefix}-average`).textContent = `${report.averageScore}점`;
   document.getElementById(`${prefix}-pass-rate`).textContent = `${report.passRate}% (${report.passedCount}명)`;
   const summary = document.getElementById(`${prefix}-wrong-summary`);
@@ -2067,7 +2221,7 @@ function renderReportData(report, target = "result") {
 }
 
 function renderReport(records) {
-  const report = buildExamReport(exam, records);
+  const report = buildExamReport(exam, records, reportMode);
   renderReportData(report);
   return report;
 }
@@ -2107,7 +2261,45 @@ function finalizeSubmission() {
   const result = attempt.grade();
   const reportState = storeResult(result);
   downloadReport(reportState.csv);
+  const status = document.getElementById("report-storage-status");
+  if (!reportState.stored) status.textContent = "브라우저 저장소에 보관하지 못했습니다. 자동 다운로드된 CSV를 반드시 보관하세요.";
+  else if (reportState.usage.warning) status.textContent = `저장 이력이 ${reportState.usage.recordCount}건, ${formatBytes(reportState.usage.bytes)}입니다. CSV 백업 후 이전 기록 정리를 권장합니다.`;
+  else status.textContent = `브라우저 저장 완료 · ${reportState.usage.recordCount}건 · ${formatBytes(reportState.usage.bytes)}`;
   renderResult(result, reportState.records);
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+function updateHistoryStorageSummary() {
+  const summary = document.getElementById("history-storage-summary");
+  if (!summary || !exam) return;
+  const records = getStoredRecords();
+  const csv = readExamReportCsv(reportStorage, exam) || (records.length ? createReportCsv(exam, records) : "");
+  const usage = getReportStorageUsage(csv, records.length);
+  summary.textContent = `${exam.title} · 버전 ${exam.revision} · ${records.length}건 · ${formatBytes(usage.bytes)}`;
+  document.getElementById("backup-clear-button").disabled = records.length === 0;
+}
+
+function backupAndClearCurrentHistory() {
+  const records = getStoredRecords();
+  if (records.length === 0) return;
+  downloadReport();
+  const message = `${exam.title} (ID: ${exam.id}, 버전: ${exam.revision})의 응시 기록 ${records.length}건을 삭제합니다. CSV 다운로드가 시작되었는지 확인하세요. 삭제 후 복구할 수 없습니다.`;
+  if (!window.confirm(message)) return;
+  const cleared = clearExamReportRecords(reportStorage, exam.id, exam.revision);
+  announce(cleared ? "현재 시험 기록을 삭제했습니다." : "시험 기록을 삭제하지 못했습니다.");
+  updateHistoryStorageSummary();
+}
+
+function clearAllHistory() {
+  if (!window.confirm("이 브라우저의 모든 시험 버전 기록을 삭제합니다. 개별 CSV로 백업하지 않은 기록은 복구할 수 없습니다.")) return;
+  const result = clearAllExamReportRecords(reportStorage);
+  announce(result.cleared ? `시험 기록 저장 키 ${result.count}개를 삭제했습니다.` : "전체 시험 기록을 삭제하지 못했습니다.");
+  updateHistoryStorageSummary();
 }
 
 function downloadJson(data, filename) {
@@ -2188,6 +2380,9 @@ document.getElementById("next-button").addEventListener("click", () => renderQue
 document.getElementById("submit-button").addEventListener("click", () => openSubmitDialog());
 document.getElementById("confirm-submit").addEventListener("click", finalizeSubmission);
 document.getElementById("download-button").addEventListener("click", () => downloadReport());
+document.getElementById("report-mode").addEventListener("change", (event) => { reportMode = event.currentTarget.value; renderReport(getStoredRecords()); });
+document.getElementById("backup-clear-button").addEventListener("click", backupAndClearCurrentHistory);
+document.getElementById("clear-all-button").addEventListener("click", clearAllHistory);
 document.getElementById("print-button").addEventListener("click", () => window.print());
 for (const button of document.querySelectorAll(".home-button")) button.addEventListener("click", reset);
 

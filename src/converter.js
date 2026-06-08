@@ -105,6 +105,7 @@ export function convertQuestionTable(text, options = {}) {
   return {
     schemaVersion: 1,
     id: options.id || `converted-exam-${new Date().toISOString().slice(0, 10)}`,
+    revision: Number(options.revision ?? 1),
     title: options.title || "검사원 평가 시험",
     instructions: options.instructions || "각 문항을 읽고 가장 알맞은 답을 선택하세요.",
     durationMinutes: Number(options.durationMinutes ?? 30),
