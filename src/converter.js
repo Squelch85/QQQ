@@ -49,6 +49,25 @@ function splitPromptAndChoices(rawQuestion, rowNumber) {
   return { prompt, choices };
 }
 
+function selectRandomQuestions(questions, questionCount, random) {
+  const shuffled = questions.slice();
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(random() * (index + 1));
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+  return shuffled.slice(0, questionCount);
+}
+
+function assignEqualScores(questions) {
+  const baseScoreInCents = Math.floor(10_000 / questions.length);
+  let remainder = 10_000 - baseScoreInCents * questions.length;
+  return questions.map((question) => {
+    const scoreInCents = baseScoreInCents + (remainder > 0 ? 1 : 0);
+    remainder -= remainder > 0 ? 1 : 0;
+    return { ...question, score: scoreInCents / 100 };
+  });
+}
+
 export function convertQuestionTable(text, options = {}) {
   if (typeof text !== "string" || !text.trim()) throw new Error("변환할 표 형식 문항을 입력하세요.");
   const rows = parseDelimitedRows(text);
@@ -66,13 +85,23 @@ export function convertQuestionTable(text, options = {}) {
       id,
       type: "single_choice",
       prompt,
-      score: Number(options.scorePerQuestion ?? 2.5),
       choices,
       scoring: { correctChoiceId }
     };
   });
 
   if (new Set(questions.map((question) => question.id)).size !== questions.length) throw new Error("중복된 문항번호가 있습니다.");
+
+  const requestedCount = options.questionCount === undefined || options.questionCount === ""
+    ? questions.length
+    : Number(options.questionCount);
+  if (!Number.isInteger(requestedCount) || requestedCount < 1 || requestedCount > questions.length) {
+    throw new Error(`출제 문항 수는 1~${questions.length} 사이의 정수여야 합니다.`);
+  }
+  const random = options.random ?? Math.random;
+  if (typeof random !== "function") throw new TypeError("랜덤 함수가 올바르지 않습니다.");
+  const selectedQuestions = selectRandomQuestions(questions, requestedCount, random);
+
   return {
     schemaVersion: 1,
     id: options.id || `converted-exam-${new Date().toISOString().slice(0, 10)}`,
@@ -82,6 +111,6 @@ export function convertQuestionTable(text, options = {}) {
     expirationPolicy: "confirm",
     showExplanations: false,
     passingScore: Number(options.passingScore ?? 80),
-    questions
+    questions: assignEqualScores(selectedQuestions)
   };
 }

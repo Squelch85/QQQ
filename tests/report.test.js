@@ -1,25 +1,49 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildExamReport, makeAttemptRecord } from "../src/report.js";
+import { buildExamReport, createReportFile, makeAttemptRecord, parseReportJson } from "../src/report.js";
 import { validExam } from "./fixtures.js";
 
-test("응시자별 합격 여부와 오답률 상위 문항을 집계한다", () => {
+test("응시자별 합격 여부와 문항 ID 기준 오답률 및 전체 통계를 집계한다", () => {
   const exam = validExam({ passingScore: 40 });
   const records = [
-    { candidate: { name: "김검사" }, score: 40, items: [{ status: "correct" }, { status: "incorrect" }, { status: "correct" }] },
-    { candidate: { name: "이검사" }, score: 10, items: [{ status: "correct" }, { status: "unanswered" }, { status: "incorrect" }] }
+    { candidate: { name: "김검사" }, score: 40, maxScore: 60, items: [{ questionId: "single", status: "correct" }, { questionId: "multiple", status: "incorrect" }, { questionId: "short", status: "correct" }] },
+    { candidate: { name: "이검사" }, score: 10, maxScore: 60, items: [{ questionId: "single", status: "correct" }, { questionId: "multiple", status: "unanswered" }, { questionId: "short", status: "incorrect" }] }
   ];
   const report = buildExamReport(exam, records);
   assert.equal(report.attempts[0].passed, true);
   assert.equal(report.attempts[1].passed, false);
-  assert.deepEqual(report.highWrongRate.map((item) => [item.questionNumber, item.wrongRate]), [[2, 100], [3, 50]]);
+  assert.equal(report.averageScore, 41.7);
+  assert.equal(report.passRate, 50);
+  assert.deepEqual(report.highWrongRate.map((item) => [item.questionId, item.wrongRate]), [["multiple", 100], ["short", 50]]);
 });
 
-test("결과 저장 레코드에는 수검자와 최소 문항 결과만 포함한다", () => {
+test("랜덤 출제에서 실제 응시한 인원만 문항별 오답률 분모로 사용한다", () => {
+  const exam = validExam({ questions: validExam().questions.slice(0, 1) });
+  const records = [
+    { candidate: { name: "김검사" }, score: 0, maxScore: 100, items: [{ questionId: "single", status: "incorrect", prompt: "하나를 고르세요." }] },
+    { candidate: { name: "이검사" }, score: 100, maxScore: 100, items: [{ questionId: "other", status: "correct", prompt: "다른 랜덤 문항" }] }
+  ];
+  const stats = buildExamReport(exam, records).questionStats;
+  assert.deepEqual(stats.map(({ questionId, attemptCount, wrongRate }) => [questionId, attemptCount, wrongRate]), [
+    ["single", 1, 100],
+    ["other", 1, 0]
+  ]);
+});
+
+test("결과 저장 레코드에는 수검자와 문항 식별 정보가 포함된다", () => {
+  const exam = validExam({ questions: validExam().questions.slice(0, 1) });
   const record = makeAttemptRecord({ name: "홍길동", employeeId: "A01", department: "품질" }, {
     submittedAt: "2026-06-08T00:00:00.000Z", score: 10, maxScore: 10,
-    items: [{ questionId: "q1", status: "correct", earnedScore: 10 }]
-  });
-  assert.deepEqual(record.items, [{ questionId: "q1", status: "correct" }]);
+    items: [{ questionId: "single", status: "correct", earnedScore: 10 }]
+  }, exam);
+  assert.deepEqual(record.items, [{ questionId: "single", status: "correct", prompt: "하나를 고르세요." }]);
   assert.equal(record.candidate.department, "품질");
+});
+
+test("저장한 누적 리포트 파일을 다시 파싱한다", () => {
+  const report = createReportFile(validExam(), [], "2026-06-08T00:00:00.000Z");
+  const parsed = parseReportJson(JSON.stringify(report));
+  assert.equal(parsed.schemaVersion, 1);
+  assert.equal(parsed.examTitle, "테스트 시험");
+  assert.equal(parsed.generatedAt, "2026-06-08T00:00:00.000Z");
 });
