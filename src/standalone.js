@@ -1857,9 +1857,8 @@ function formatDuration(minutes) {
   return minutes === 0 ? "시간 제한 없음" : `${minutes}분`;
 }
 
-function prepareExam(nextExam, { resetRecords = false } = {}) {
+function prepareExam(nextExam) {
   exam = structuredClone(nextExam);
-  if (resetRecords) clearExamReportRecords(reportStorage, exam.id);
   publicExam = toPublicExam(exam);
   attempt = new Attempt(exam);
   document.getElementById("exam-title").textContent = publicExam.title;
@@ -1876,7 +1875,7 @@ async function loadSelectedFile(file) {
   if (!file) return;
   try {
     if (file.size > MAX_FILE_BYTES) throw new Error(`시험지 파일은 ${MAX_FILE_BYTES / 1024 / 1024}MB 이하여야 합니다.`);
-    prepareExam(parseExamJson(await file.text()), { resetRecords: true });
+    prepareExam(parseExamJson(await file.text()));
   } catch (error) {
     fileError.textContent = error instanceof Error ? error.message : "시험지를 열 수 없습니다.";
     fileError.hidden = false;
@@ -2072,7 +2071,9 @@ function finalizeSubmission() {
   timer.hidden = true;
   attempt.submit();
   const result = attempt.grade();
-  renderResult(result, storeResult(result));
+  const records = storeResult(result);
+  downloadReport(records);
+  renderResult(result, records);
 }
 
 function downloadJson(data, filename) {
@@ -2081,8 +2082,8 @@ function downloadJson(data, filename) {
   link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url);
 }
 
-function downloadReport() {
-  const csv = createReportCsv(exam, getStoredRecords());
+function downloadReport(records = getStoredRecords()) {
+  const csv = createReportCsv(exam, records);
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
   const link = document.createElement("a");
   link.href = url;
@@ -2124,7 +2125,7 @@ document.getElementById("report-file").addEventListener("change", async (event) 
 });
 
 document.getElementById("home-link").addEventListener("click", (event) => { event.preventDefault(); reset(); });
-document.getElementById("default-exam-button").addEventListener("click", () => prepareExam(defaultExam, { resetRecords: true }));
+document.getElementById("default-exam-button").addEventListener("click", () => prepareExam(defaultExam));
 document.getElementById("show-converter-button").addEventListener("click", () => { showView("converter-view"); document.getElementById("converter-title").focus(); });
 document.getElementById("convert-button").addEventListener("click", () => {
   const errorBox = document.getElementById("converter-error");
