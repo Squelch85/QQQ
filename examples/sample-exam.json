@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "id": "qqq-sample-2026",
+  "title": "기초 과학 확인",
+  "instructions": "각 문항을 읽고 가장 알맞은 답을 선택하거나 입력하세요.\n제출 후에는 답안을 수정할 수 없습니다.",
+  "durationMinutes": 10,
+  "expirationPolicy": "confirm",
+  "showExplanations": true,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single_choice",
+      "prompt": "물이 표준 기압에서 어는 온도는?",
+      "score": 10,
+      "choices": [
+        { "id": "a", "text": "0°C" },
+        { "id": "b", "text": "10°C" },
+        { "id": "c", "text": "100°C" }
+      ],
+      "scoring": { "correctChoiceId": "a" },
+      "explanation": "표준 기압에서 물의 어는점은 0°C입니다."
+    },
+    {
+      "id": "q2",
+      "type": "multiple_choice",
+      "prompt": "태양계의 행성을 모두 고르세요.",
+      "score": 20,
+      "choices": [
+        { "id": "earth", "text": "지구" },
+        { "id": "mars", "text": "화성" },
+        { "id": "moon", "text": "달" },
+        { "id": "sun", "text": "태양" }
+      ],
+      "scoring": { "correctChoiceIds": ["earth", "mars"] },
+      "explanation": "지구와 화성은 행성이며, 달은 위성이고 태양은 항성입니다."
+    },
+    {
+      "id": "q3",
+      "type": "short_answer",
+      "prompt": "식물이 빛을 이용해 양분을 만드는 과정을 쓰세요.",
+      "score": 20,
+      "scoring": {
+        "acceptedAnswers": ["광합성"],
+        "normalization": { "trim": true, "collapseWhitespace": true, "caseInsensitive": false }
+      },
+      "explanation": "식물이 빛 에너지를 이용해 유기물을 만드는 과정은 광합성입니다."
+    }
+  ]
+}

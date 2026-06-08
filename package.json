@@ -1,0 +1,15 @@
+{
+  "name": "qqq-offline-exam",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "네트워크 없이 실행하는 로컬 시험 응시 및 채점 도구",
+  "scripts": {
+    "start": "python3 -m http.server 4173",
+    "test": "node --test",
+    "check": "node --check src/app.js && node --check src/exam.js && node --check src/attempt.js && node --check src/grading.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
