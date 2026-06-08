@@ -2,7 +2,7 @@ import { Attempt } from "./attempt.js";
 import { convertQuestionTable } from "./converter.js";
 import { defaultExam } from "./default-exam.js";
 import { getMaxScore, MAX_FILE_BYTES, parseExamJson, toPublicExam } from "./exam.js";
-import { buildExamReport, createReportFile, makeAttemptRecord, parseReportJson } from "./report.js";
+import { buildExamReport, createReportCsv, makeAttemptRecord, parseReportCsv } from "./report.js";
 import { appendExamReportRecord, clearExamReportRecords, readExamReportRecords } from "./report-storage.js";
 
 const viewIds = ["load-view", "converter-view", "ready-view", "exam-view", "result-view", "report-view"];
@@ -266,7 +266,13 @@ function downloadJson(data, filename) {
 }
 
 function downloadReport() {
-  downloadJson(createReportFile(exam, getStoredRecords()), `${exam.id}-report.json`);
+  const csv = createReportCsv(exam, getStoredRecords());
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${exam.id}-report.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function reset() {
@@ -285,7 +291,7 @@ document.getElementById("report-file").addEventListener("change", async (event) 
   if (!file) return;
   try {
     if (file.size > MAX_FILE_BYTES) throw new Error(`리포트 파일은 ${MAX_FILE_BYTES / 1024 / 1024}MB 이하여야 합니다.`);
-    const report = parseReportJson(await file.text());
+    const report = parseReportCsv(await file.text());
     document.getElementById("loaded-report-title").textContent = report.examTitle;
     document.getElementById("loaded-report-generated-at").textContent = report.generatedAt
       ? `생성일시 ${new Date(report.generatedAt).toLocaleString("ko-KR")}`

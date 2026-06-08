@@ -23,8 +23,8 @@
         <div class="hero-actions">
           <button id="default-exam-button" class="primary">기본 시험 시작 <span aria-hidden="true">→</span></button>
           <button id="show-converter-button" class="secondary">문항 JSON 변환</button>
-          <label class="secondary button-label" for="report-file">리포트 불러오기</label>
-          <input id="report-file" type="file" accept="application/json,.json">
+          <label class="secondary button-label" for="report-file">CSV 리포트 불러오기</label>
+          <input id="report-file" type="file" accept="text/csv,.csv">
         </div>
         <div id="report-file-error" class="error" role="alert" hidden></div>
       </div>
@@ -110,7 +110,7 @@
         <div class="table-wrap"><table><thead><tr><th>응시일시</th><th>성명</th><th>사번</th><th>부서</th><th>점수</th><th>합격 여부</th></tr></thead><tbody id="report-body"></tbody></table></div>
       </section>
       <div class="result-actions">
-        <button id="download-button" class="primary">전체 리포트 저장</button>
+        <button id="download-button" class="primary">누적 리포트 CSV 저장</button>
         <button id="print-button" class="secondary">인쇄</button>
         <button class="text-button home-button">새 시험 시작</button>
       </div>

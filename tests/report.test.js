@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildExamReport, createReportFile, makeAttemptRecord, parseReportJson } from "../src/report.js";
+import { buildExamReport, createReportCsv, makeAttemptRecord, parseReportCsv } from "../src/report.js";
 import { appendExamReportRecord, clearExamReportRecords, getExamReportStorageKey, readExamReportRecords, writeExamReportRecords } from "../src/report-storage.js";
 import { validExam } from "./fixtures.js";
 
@@ -41,12 +41,65 @@ test("결과 저장 레코드에는 수검자와 문항 식별 정보가 포함�
   assert.equal(record.candidate.department, "품질");
 });
 
-test("저장한 누적 리포트 파일을 다시 파싱한다", () => {
-  const report = createReportFile(validExam(), [], "2026-06-08T00:00:00.000Z");
-  const parsed = parseReportJson(JSON.stringify(report));
+test("인원별 누적 결과를 CSV 한 행씩 생성하고 다시 집계한다", () => {
+  const exam = validExam({ passingScore: 40 });
+  const records = [
+    {
+      candidate: { name: "홍,길동", employeeId: "=1+1", department: "품질\n보증" },
+      submittedAt: "2026-06-08T00:00:00.000Z",
+      score: 40,
+      maxScore: 60,
+      items: [
+        { questionId: "single", status: "correct", prompt: "하나를 고르세요." },
+        { questionId: "multiple", status: "incorrect", prompt: "모두 고르세요." }
+      ]
+    },
+    {
+      candidate: { name: "김검사", employeeId: "A02", department: "검사" },
+      submittedAt: "2026-06-08T01:00:00.000Z",
+      score: 10,
+      maxScore: 60,
+      items: [{ questionId: "single", status: "unanswered", prompt: "하나를 고르세요." }]
+    }
+  ];
+
+  const csv = createReportCsv(exam, records, "2026-06-08T02:00:00.000Z");
+  const parsed = parseReportCsv(csv);
+
+  assert.ok(csv.startsWith("\uFEFF리포트 버전,"));
+  assert.match(csv, /'\=1\+1/);
   assert.equal(parsed.schemaVersion, 1);
   assert.equal(parsed.examTitle, "테스트 시험");
-  assert.equal(parsed.generatedAt, "2026-06-08T00:00:00.000Z");
+  assert.equal(parsed.generatedAt, "2026-06-08T02:00:00.000Z");
+  assert.equal(parsed.examineeCount, 2);
+  assert.equal(parsed.attempts[0].candidate.name, "홍,길동");
+  assert.equal(parsed.attempts[0].candidate.employeeId, "=1+1");
+  assert.equal(parsed.attempts[0].candidate.department, "품질\n보증");
+  assert.deepEqual(parsed.attempts[0].items.map(({ questionId, status }) => [questionId, status]), [["single", "correct"], ["multiple", "incorrect"]]);
+  assert.equal(parsed.passRate, 50);
+});
+
+test("누적 리포트 CSV의 형식과 행 일관성을 검증한다", () => {
+  assert.throws(() => parseReportCsv("이름,점수\r\n홍길동,100\r\n"), /지원하는 누적 리포트 CSV 형식/);
+
+  const csv = createReportCsv(validExam(), [
+    {
+      candidate: { name: "홍길동", employeeId: "A01", department: "품질" },
+      submittedAt: "2026-06-08T00:00:00.000Z",
+      score: 60,
+      maxScore: 60,
+      items: []
+    },
+    {
+      candidate: { name: "김검사", employeeId: "A02", department: "검사" },
+      submittedAt: "2026-06-08T01:00:00.000Z",
+      score: 30,
+      maxScore: 60,
+      items: []
+    }
+  ], "2026-06-08T02:00:00.000Z");
+  const inconsistent = csv.replace("테스트 시험,80,", "다른 시험,80,");
+  assert.throws(() => parseReportCsv(inconsistent), /리포트 정보가 첫 번째 응시 결과와 다릅니다/);
 });
 
 test("시험지 JSON 재로드를 위해 시험별 누적 결과 저장소를 초기화한다", () => {
