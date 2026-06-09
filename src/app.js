@@ -3,7 +3,8 @@ import { convertQuestionTable } from "./converter.js";
 import { defaultExam } from "./default-exam.js";
 import { getMaxScore, MAX_FILE_BYTES, parseExamJson, toPublicExam } from "./exam.js";
 import { buildExamReport, createReportCsv, makeAttemptRecord, parseReportCsv } from "./report.js";
-import { appendExamReportRecord, readExamReportCsv, readExamReportRecords } from "./report-storage.js";
+import { appendExamReportRecord, clearAllExamReportRecords, clearExamReportRecords, getReportStorageUsage, readExamReportCsv, readExamReportRecords } from "./report-storage.js";
+import { clearAllReportFiles, clearReportFiles, persistReportFiles } from "./report-file-storage.js";
 
 const viewIds = ["load-view", "converter-view", "ready-view", "exam-view", "result-view", "report-view"];
 const views = viewIds.map((id) => document.getElementById(id));
@@ -26,6 +27,7 @@ let candidate = null;
 let currentQuestionIndex = 0;
 let timerId = null;
 let deadline = null;
+let reportMode = "latestPerEmployee";
 
 function showView(id) {
   for (const view of views) view.hidden = view.id !== id;
@@ -41,17 +43,40 @@ function formatDuration(minutes) {
   return minutes === 0 ? "시간 제한 없음" : `${minutes}분`;
 }
 
+function showCurrentExamReady() {
+  if (!exam) return;
+  attempt = new Attempt(exam);
+  candidate = null;
+  currentQuestionIndex = 0;
+  document.getElementById("exam-title").textContent = publicExam.title;
+  const passingScore = exam.passingScore ?? getMaxScore(exam) * 0.8;
+  document.getElementById("exam-meta").textContent = `버전 ${publicExam.revision} · ${publicExam.questions.length}문항 · ${formatDuration(publicExam.durationMinutes)} · 합격 ${passingScore}점 이상`;
+  document.getElementById("exam-instructions").textContent = publicExam.instructions || "별도 유의사항이 없습니다.";
+  document.getElementById("candidate-form").reset();
+  updateHistoryStorageSummary();
+  const storedRecords = getStoredRecords();
+  if (storedRecords.length > 0) void persistReportFiles(navigator.storage, exam, storedRecords);
+  showView("ready-view");
+  document.getElementById("exam-title").focus({ preventScroll: true });
+}
+
 function prepareExam(nextExam) {
   exam = structuredClone(nextExam);
   publicExam = toPublicExam(exam);
-  attempt = new Attempt(exam);
-  document.getElementById("exam-title").textContent = publicExam.title;
-  const passingScore = exam.passingScore ?? getMaxScore(exam) * 0.8;
-  document.getElementById("exam-meta").textContent = `${publicExam.questions.length}문항 · ${formatDuration(publicExam.durationMinutes)} · 합격 ${passingScore}점 이상`;
-  document.getElementById("exam-instructions").textContent = publicExam.instructions || "별도 유의사항이 없습니다.";
-  document.getElementById("candidate-form").reset();
-  showView("ready-view");
-  document.getElementById("exam-title").focus({ preventScroll: true });
+  showCurrentExamReady();
+}
+
+function showExamSelection() {
+  if (timerId) clearInterval(timerId);
+  timerId = null;
+  timer.hidden = true;
+  attempt = null;
+  candidate = null;
+  fileInput.value = "";
+  const currentExamPanel = document.getElementById("current-exam-panel");
+  currentExamPanel.hidden = !exam;
+  if (exam) document.getElementById("current-exam-summary").textContent = `${exam.title} · 버전 ${exam.revision} · ${exam.questions.length}문항`;
+  showView("load-view");
 }
 
 async function loadSelectedFile(file) {
@@ -189,7 +214,8 @@ function storeResult(result) {
 
 function renderReportData(report, target = "result") {
   const prefix = target === "result" ? "report" : "loaded-report";
-  document.getElementById(`${prefix}-count`).textContent = `총 ${report.examineeCount}명`;
+  document.getElementById(`${prefix}-count`).textContent = `선택 ${report.examineeCount}건 · 전체 ${report.totalAttemptCount}건 · 고유 ${report.uniqueExamineeCount}명`;
+  document.getElementById(`${prefix}-version`).textContent = `시험 ID ${report.examId} · 버전 ${report.examRevision}`;
   document.getElementById(`${prefix}-average`).textContent = `${report.averageScore}점`;
   document.getElementById(`${prefix}-pass-rate`).textContent = `${report.passRate}% (${report.passedCount}명)`;
   const summary = document.getElementById(`${prefix}-wrong-summary`);
@@ -217,7 +243,7 @@ function renderReportData(report, target = "result") {
 }
 
 function renderReport(records) {
-  const report = buildExamReport(exam, records);
+  const report = buildExamReport(exam, records, reportMode);
   renderReportData(report);
   return report;
 }
@@ -250,14 +276,55 @@ function renderResult(result, records) {
   announce(`채점 완료. ${result.maxScore}점 만점에 ${result.score}점, ${passed ? "합격" : "불합격"}입니다.`);
 }
 
-function finalizeSubmission() {
+async function finalizeSubmission() {
   if (timerId) clearInterval(timerId);
   timer.hidden = true;
   attempt.submit();
   const result = attempt.grade();
   const reportState = storeResult(result);
-  downloadReport(reportState.csv);
+  const fileState = await persistReportFiles(navigator.storage, exam, reportState.records, reportState.csv);
+  const status = document.getElementById("report-storage-status");
+  if (!reportState.stored && !fileState.stored) status.textContent = "자동 저장소에 보관하지 못했습니다. 누적 리포트 CSV 다시 저장을 눌러 파일을 보관하세요.";
+  else if (!fileState.stored) status.textContent = "브라우저 기록은 저장했지만 내부 CSV 디렉터리를 사용할 수 없습니다. 필요하면 CSV를 직접 저장하세요.";
+  else if (reportState.usage.warning) status.textContent = `내부 CSV 디렉터리 자동 저장 완료 · ${reportState.usage.recordCount}건 · ${formatBytes(reportState.usage.bytes)}. 이전 기록 정리를 권장합니다.`;
+  else status.textContent = `저장 창 없이 내부 CSV 디렉터리에 자동 저장했습니다 · ${reportState.usage.recordCount}건 · ${formatBytes(reportState.usage.bytes)}`;
   renderResult(result, reportState.records);
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+function updateHistoryStorageSummary() {
+  const summary = document.getElementById("history-storage-summary");
+  if (!summary || !exam) return;
+  const records = getStoredRecords();
+  const csv = readExamReportCsv(reportStorage, exam) || (records.length ? createReportCsv(exam, records) : "");
+  const usage = getReportStorageUsage(csv, records.length);
+  summary.textContent = `${exam.title} · 버전 ${exam.revision} · ${records.length}건 · ${formatBytes(usage.bytes)}`;
+  document.getElementById("backup-clear-button").disabled = records.length === 0;
+}
+
+async function backupAndClearCurrentHistory() {
+  const records = getStoredRecords();
+  if (records.length === 0) return;
+  downloadReport();
+  const message = `${exam.title} (ID: ${exam.id}, 버전: ${exam.revision})의 응시 기록 ${records.length}건을 삭제합니다. CSV 다운로드가 시작되었는지 확인하세요. 삭제 후 복구할 수 없습니다.`;
+  if (!window.confirm(message)) return;
+  const browserCleared = clearExamReportRecords(reportStorage, exam.id, exam.revision);
+  const filesCleared = await clearReportFiles(navigator.storage, exam);
+  announce(browserCleared || filesCleared ? "현재 시험 기록을 삭제했습니다." : "시험 기록을 삭제하지 못했습니다.");
+  updateHistoryStorageSummary();
+}
+
+async function clearAllHistory() {
+  if (!window.confirm("이 브라우저의 모든 시험 버전 기록을 삭제합니다. 개별 CSV로 백업하지 않은 기록은 복구할 수 없습니다.")) return;
+  const result = clearAllExamReportRecords(reportStorage);
+  const filesCleared = await clearAllReportFiles(navigator.storage);
+  announce(result.cleared || filesCleared ? `시험 기록 저장 키 ${result.count}개와 내부 CSV 디렉터리를 삭제했습니다.` : "전체 시험 기록을 삭제하지 못했습니다.");
+  updateHistoryStorageSummary();
 }
 
 function downloadJson(data, filename) {
@@ -273,14 +340,6 @@ function downloadReport(csv = readExamReportCsv(reportStorage, exam) || createRe
   link.download = `${exam.id}-report.csv`;
   link.click();
   URL.revokeObjectURL(url);
-}
-
-function reset() {
-  if (timerId) clearInterval(timerId);
-  exam = publicExam = attempt = candidate = null;
-  fileInput.value = "";
-  timer.hidden = true;
-  showView("load-view");
 }
 
 fileInput.addEventListener("change", () => loadSelectedFile(fileInput.files[0]));
@@ -307,8 +366,9 @@ document.getElementById("report-file").addEventListener("change", async (event) 
   }
 });
 
-document.getElementById("home-link").addEventListener("click", (event) => { event.preventDefault(); reset(); });
+document.getElementById("home-link").addEventListener("click", (event) => { event.preventDefault(); showExamSelection(); });
 document.getElementById("default-exam-button").addEventListener("click", () => prepareExam(defaultExam));
+document.getElementById("resume-exam-button").addEventListener("click", showCurrentExamReady);
 document.getElementById("show-converter-button").addEventListener("click", () => { showView("converter-view"); document.getElementById("converter-title").focus(); });
 document.getElementById("convert-button").addEventListener("click", () => {
   const errorBox = document.getElementById("converter-error");
@@ -338,5 +398,9 @@ document.getElementById("next-button").addEventListener("click", () => renderQue
 document.getElementById("submit-button").addEventListener("click", () => openSubmitDialog());
 document.getElementById("confirm-submit").addEventListener("click", finalizeSubmission);
 document.getElementById("download-button").addEventListener("click", () => downloadReport());
+document.getElementById("report-mode").addEventListener("change", (event) => { reportMode = event.currentTarget.value; renderReport(getStoredRecords()); });
+document.getElementById("backup-clear-button").addEventListener("click", backupAndClearCurrentHistory);
+document.getElementById("clear-all-button").addEventListener("click", clearAllHistory);
 document.getElementById("print-button").addEventListener("click", () => window.print());
-for (const button of document.querySelectorAll(".home-button")) button.addEventListener("click", reset);
+for (const button of document.querySelectorAll(".select-exam-button")) button.addEventListener("click", showExamSelection);
+document.getElementById("restart-exam-button").addEventListener("click", showCurrentExamReady);
