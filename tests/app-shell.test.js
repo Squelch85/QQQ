@@ -44,15 +44,33 @@ test("시험 기록은 기본 보존하고 명시적으로 백업·삭제할 수
   assert.match(html, /전체 시험 기록 삭제/);
 });
 
-test("누적 리포트는 CSV 파일로 저장하고 불러온다", async () => {
-  const [html, appSource] = await Promise.all([readProjectFile("index.html"), readProjectFile("src/app.js")]);
+test("누적 리포트는 응시자별 디렉터리 자동 저장과 수동 저장을 지원한다", async () => {
+  const [html, appSource, directorySource] = await Promise.all([
+    readProjectFile("index.html"),
+    readProjectFile("src/app.js"),
+    readProjectFile("src/directory-report-storage.js")
+  ]);
 
   assert.match(html, /id="report-file" type="file" accept="text\/csv,\.csv"/);
   assert.match(html, /누적 리포트 CSV 다시 저장/);
-  assert.match(html, /최신 누적 CSV도 자동 저장/);
-  assert.match(appSource, /const reportState = storeResult\(result\);\s+downloadReport\(reportState\.csv\);[\s\S]+renderResult\(result, reportState\.records\);/);
-  assert.match(appSource, /readExamReportCsv\(reportStorage, exam\) \|\| createReportCsv\(exam, getStoredRecords\(\)\)/);
+  assert.match(html, /응시자별 누적 CSV를 저장 창 없이 갱신/);
+  assert.match(html, /id="select-directory-button"/);
+  assert.match(appSource, /showDirectoryPicker\(\{ id: "candidate-reports", mode: "readwrite" \}\)/);
+  assert.match(appSource, /writeCandidateReport\(reportDirectoryHandle, exam, reportState\.records, candidate\)/);
+  assert.doesNotMatch(appSource, /storeResult\(result\);\s+downloadReport/);
+  assert.match(directorySource, /queryPermission\(\{ mode: "readwrite" \}\)/);
+  assert.match(directorySource, /createWritable\(\)/);
   assert.match(appSource, /parseReportCsv\(await file\.text\(\)\)/);
   assert.match(appSource, /type: "text\/csv;charset=utf-8"/);
-  assert.doesNotMatch(appSource, /showSaveFilePicker|showDirectoryPicker/);
+  assert.doesNotMatch(appSource, /showSaveFilePicker/);
+});
+
+test("현재 시험과 답안 상태는 홈 이동 후에도 유지하고 명시적 시험 로드 때만 교체한다", async () => {
+  const [html, appSource] = await Promise.all([readProjectFile("index.html"), readProjectFile("src/app.js")]);
+
+  assert.match(html, /id="resume-exam-button"/);
+  assert.match(appSource, /function navigateHome\(\)[\s\S]+showView\("load-view"\);/);
+  assert.doesNotMatch(appSource, /function navigateHome\(\)[\s\S]*?exam = publicExam = attempt/);
+  assert.match(appSource, /function resumeExam\(\)[\s\S]+renderQuestion\(currentQuestionIndex\)/);
+  assert.match(appSource, /function prepareExam\(nextExam\)[\s\S]+attempt = new Attempt\(exam\)/);
 });
