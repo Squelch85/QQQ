@@ -44,6 +44,14 @@ test("시험 결과는 CSV 자동 저장 없이 SQLite API에 저장한다", asy
   assert.match(html, /SQLite DB에 저장/);
 });
 
+test("DB 저장 실패 시 합격자는 중앙 조회와 분리된 로컬 인증서를 발행한다", async () => {
+  const appSource = await readProjectFile("src/app.js");
+
+  assert.match(appSource, /makeLocalCertificateResult\(candidate, result, exam\)/);
+  assert.match(appSource, /createCertificatePng\(local, null\)/);
+  assert.match(appSource, /로컬 인증서 발행 완료 \(중앙 조회 불가\)/);
+});
+
 test("인증 검증과 관리자 검색·재발행·취소·CSV 내보내기를 제공한다", async () => {
   const [html, appSource, apiSource] = await Promise.all([
     readProjectFile("index.html"),

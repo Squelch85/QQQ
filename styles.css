@@ -179,7 +179,7 @@ code { padding: 2px 5px; background: #e9e6dc; }
 .certificate-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .certificate-heading h2 { margin: 0; font-family: Georgia, serif; font-size: 2.3rem; }
 .certificate-badge { padding: 8px 13px; border-radius: 999px; font-size: .8rem; font-weight: 900; }
-.certificate-badge.valid { color: white; background: var(--good); }
+.certificate-badge.valid, .certificate-badge.local-only { color: white; background: var(--good); }
 .certificate-badge.issue-failed, .certificate-badge.db-save-failed { color: white; background: var(--bad); }
 .certificate-badge.cancelled, .certificate-badge.expired { color: #332600; background: #e6b94f; }
 .certificate-badge.issue-pending { color: #17345f; background: #dce9f8; }

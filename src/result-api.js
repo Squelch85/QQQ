@@ -35,6 +35,24 @@ export function makeResultPayload(candidate, result, exam) {
   };
 }
 
+export function makeLocalCertificateResult(candidate, result, exam) {
+  const payload = makeResultPayload(candidate, result, exam);
+  const grade = result.score >= 90 ? "A" : result.score >= 80 ? "B" : result.score >= 70 ? "C" : "D";
+  const passed = result.score >= payload.pass_score;
+  if (!passed || result.score < 80) return { ...payload, grade, pass_status: passed ? "PASS" : "FAIL", cert_status: "NOT_ELIGIBLE" };
+
+  const randomId = globalThis.crypto?.randomUUID?.().replaceAll("-", "").slice(0, 12).toUpperCase()
+    ?? `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`.toUpperCase();
+  return {
+    ...payload,
+    grade,
+    pass_status: "PASS",
+    cert_id: `LOCAL-${payload.issued_date.replaceAll("-", "")}-${randomId}`,
+    cert_status: "LOCAL_ONLY",
+    qr_value: null
+  };
+}
+
 export async function saveExamResult(candidate, result, exam) {
   return (await request("/api/results", {
     method: "POST",

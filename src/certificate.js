@@ -158,7 +158,9 @@ export async function createCertificatePng(result, verificationUrl) {
     "상기 인원은 검사원 자격인증을 위한 Gauge R&R 필기평가에서 요구 기준을 충족하였으므로,",
     "측정시스템분석 및 검사 신뢰성 관리에 대한 기본 이해도를 보유하였음을 인증합니다.",
     "본 인증은 필기평가 결과에 대한 인증이며, 최종 자격은 공정 교육·실기평가·관리자 승인 충족 시 부여됩니다.",
-    "본 인증서는 검사 인증툴의 원본 평가기록과 인증 ID 조회 결과가 일치할 때 유효합니다."
+    result.cert_status === "LOCAL_ONLY"
+      ? "DB 장애로 로컬 발행된 인증서이며 중앙 조회·취소·감사 이력을 제공하지 않습니다."
+      : "본 인증서는 검사 인증툴의 원본 평가기록과 인증 ID 조회 결과가 일치할 때 유효합니다."
   ];
   lines.forEach((line, index) => context.fillText(line, 120, 570 + index * 35));
   drawField(context, "평가 담당자", result.evaluator, 120, 750);
@@ -169,7 +171,12 @@ export async function createCertificatePng(result, verificationUrl) {
   context.fillStyle = "#64748b";
   context.font = "20px sans-serif";
   context.fillText(`발행일자 ${result.issued_date}`, 830, 815);
-  drawQr(context, verificationUrl, 1330, 650, 170);
+  if (verificationUrl) drawQr(context, verificationUrl, 1330, 650, 170);
+  else {
+    context.fillStyle = "#64748b";
+    context.font = "bold 22px sans-serif";
+    context.fillText("LOCAL ONLY", 1360, 740);
+  }
 
   return new Promise((resolve, reject) => canvas.toBlob(
     (blob) => blob ? resolve(blob) : reject(new Error("PNG 이미지를 만들지 못했습니다.")),
