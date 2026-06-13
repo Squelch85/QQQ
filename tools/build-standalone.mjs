@@ -7,8 +7,8 @@ const sourceFiles = [
   "src/converter.js",
   "src/default-exam.js",
   "src/report.js",
-  "src/report-storage.js",
-  "src/directory-report-storage.js",
+  "src/certificate.js",
+  "src/result-api.js",
   "src/app.js"
 ];
 const outputPath = "src/standalone.js";

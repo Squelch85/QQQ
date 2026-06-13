@@ -169,3 +169,8 @@ code { padding: 2px 5px; background: #e9e6dc; }
 .report-mode-label select { padding: 10px; color: var(--ink); background: white; border: 1px solid var(--line); }
 .storage-status { min-height: 1.4em; font-size: .84rem; font-weight: 700; }
 .report-version { margin: 6px 0 0; font-size: .8rem; font-weight: 700; }
+.inline-search { display: flex; align-items: end; gap: 14px; margin: 24px 0; }
+.inline-search label { flex: 1; }
+.verification-result { padding: 22px; white-space: pre-wrap; line-height: 1.8; color: var(--ink); background: #eef5f0; border-left: 4px solid var(--good); }
+#admin-search-form { align-items: end; margin: 24px 0; }
+#admin-results-body button { margin: 2px; padding: 7px 9px; }
