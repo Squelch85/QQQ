@@ -3,23 +3,16 @@ import { convertQuestionTable } from "./converter.js";
 import { defaultExam } from "./default-exam.js";
 import { getMaxScore, MAX_FILE_BYTES, parseExamJson, toPublicExam } from "./exam.js";
 import { buildExamReport, createReportCsv, makeAttemptRecord, parseReportCsv } from "./report.js";
-import { appendExamReportRecord, clearAllExamReportRecords, clearExamReportRecords, getReportStorageUsage, readExamReportCsv, readExamReportRecords } from "./report-storage.js";
-import { loadReportDirectoryHandle, requestDirectoryPermission, saveReportDirectoryHandle, writeCandidateReport } from "./directory-report-storage.js";
+import { createCertificatePng } from "./certificate.js";
+import { cancelCertificate, exportResultsCsvUrl, saveExamResult, searchResults, uploadCertificate, verifyCertificate, markCertificateIssueFailed } from "./result-api.js";
 
-const viewIds = ["load-view", "converter-view", "ready-view", "exam-view", "result-view", "report-view"];
+const viewIds = ["load-view", "converter-view", "ready-view", "exam-view", "result-view", "report-view", "verify-view", "admin-view"];
 const views = viewIds.map((id) => document.getElementById(id));
 const fileInput = document.getElementById("exam-file");
 const fileError = document.getElementById("file-error");
 const timer = document.getElementById("timer");
 const liveStatus = document.getElementById("live-status");
 const submitDialog = document.getElementById("submit-dialog");
-const reportStorage = (() => {
-  try {
-    return window.localStorage;
-  } catch {
-    return null;
-  }
-})();
 let exam = null;
 let publicExam = null;
 let attempt = null;
@@ -28,7 +21,8 @@ let currentQuestionIndex = 0;
 let timerId = null;
 let deadline = null;
 let reportMode = "latestPerEmployee";
-let reportDirectoryHandle = null;
+let runtimeRecords = [];
+let lastCertificateResult = null;
 
 function showView(id) {
   for (const view of views) view.hidden = view.id !== id;
@@ -192,11 +186,13 @@ function statusLabel(status) {
 }
 
 function getStoredRecords() {
-  return readExamReportRecords(reportStorage, exam);
+  return runtimeRecords;
 }
 
 function storeResult(result) {
-  return appendExamReportRecord(reportStorage, exam, makeAttemptRecord(candidate, result, exam));
+  const record = makeAttemptRecord(candidate, result, exam);
+  runtimeRecords.push(record);
+  return record;
 }
 
 function renderReportData(report, target = "result") {
@@ -267,18 +263,30 @@ async function finalizeSubmission() {
   stopTimer();
   attempt.submit();
   const result = attempt.grade();
-  const reportState = storeResult(result);
-  const directoryState = await writeCandidateReport(reportDirectoryHandle, exam, reportState.records, candidate);
+  storeResult(result);
   const status = document.getElementById("report-storage-status");
-  const browserStatus = reportState.stored
-    ? `브라우저 저장 완료 · ${reportState.usage.recordCount}건 · ${formatBytes(reportState.usage.bytes)}`
-    : "브라우저 저장소에 보관하지 못했습니다. 수동으로 CSV를 저장하세요.";
-  if (directoryState.saved) status.textContent = `${browserStatus} · ${directoryState.filename} 자동 저장 (${directoryState.recordCount}건)`;
-  else if (directoryState.reason === "permission_required") status.textContent = `${browserStatus} · 자동 저장 권한이 필요합니다. 시험 준비 화면에서 디렉터리를 다시 선택하세요.`;
-  else if (directoryState.reason === "write_failed") status.textContent = `${browserStatus} · 응시자별 CSV 자동 저장에 실패했습니다.`;
-  else if (reportState.usage.warning) status.textContent = `${browserStatus} · CSV 백업 후 이전 기록 정리를 권장합니다.`;
-  else status.textContent = `${browserStatus} · 자동 저장 디렉터리가 지정되지 않았습니다.`;
-  renderResult(result, reportState.records);
+  try {
+    let saved = await saveExamResult(candidate, result, exam);
+    status.textContent = `SQLite DB 저장 완료 · 결과 번호 ${saved.result_id}`;
+    lastCertificateResult = null;
+    if (saved.cert_id) {
+      try {
+        const verificationUrl = new URL(`/api/certificates/${encodeURIComponent(saved.cert_id)}`, window.location.origin).href;
+        const png = await createCertificatePng(saved, verificationUrl);
+        saved = await uploadCertificate(saved.cert_id, png);
+        lastCertificateResult = saved;
+        status.textContent += ` · 인증서 자동 발행 완료 (${saved.cert_id})`;
+      } catch (error) {
+        await markCertificateIssueFailed(saved.cert_id, error instanceof Error ? error.message : "인증서 생성 실패");
+        status.textContent += ` · 인증서 생성 실패 (DB 결과는 보존됨, ${saved.cert_id})`;
+      }
+    } else {
+      status.textContent += " · 인증서 발행 기준 미충족";
+    }
+  } catch (error) {
+    status.textContent = error instanceof Error ? `DB 저장 실패: ${error.message}` : "DB 저장에 실패했습니다.";
+  }
+  renderResult(result, runtimeRecords);
 }
 
 function formatBytes(bytes) {
@@ -290,29 +298,7 @@ function formatBytes(bytes) {
 function updateHistoryStorageSummary() {
   const summary = document.getElementById("history-storage-summary");
   if (!summary || !exam) return;
-  const records = getStoredRecords();
-  const csv = readExamReportCsv(reportStorage, exam) || (records.length ? createReportCsv(exam, records) : "");
-  const usage = getReportStorageUsage(csv, records.length);
-  summary.textContent = `${exam.title} · 버전 ${exam.revision} · ${records.length}건 · ${formatBytes(usage.bytes)}`;
-  document.getElementById("backup-clear-button").disabled = records.length === 0;
-}
-
-function backupAndClearCurrentHistory() {
-  const records = getStoredRecords();
-  if (records.length === 0) return;
-  downloadReport();
-  const message = `${exam.title} (ID: ${exam.id}, 버전: ${exam.revision})의 응시 기록 ${records.length}건을 삭제합니다. CSV 다운로드가 시작되었는지 확인하세요. 삭제 후 복구할 수 없습니다.`;
-  if (!window.confirm(message)) return;
-  const cleared = clearExamReportRecords(reportStorage, exam.id, exam.revision);
-  announce(cleared ? "현재 시험 기록을 삭제했습니다." : "시험 기록을 삭제하지 못했습니다.");
-  updateHistoryStorageSummary();
-}
-
-function clearAllHistory() {
-  if (!window.confirm("이 브라우저의 모든 시험 버전 기록을 삭제합니다. 개별 CSV로 백업하지 않은 기록은 복구할 수 없습니다.")) return;
-  const result = clearAllExamReportRecords(reportStorage);
-  announce(result.cleared ? `시험 기록 저장 키 ${result.count}개를 삭제했습니다.` : "전체 시험 기록을 삭제하지 못했습니다.");
-  updateHistoryStorageSummary();
+  summary.textContent = `${exam.title} · 버전 ${exam.revision} · 제출 결과는 SQLite DB에 원본 저장됩니다.`;
 }
 
 function downloadJson(data, filename) {
@@ -321,7 +307,7 @@ function downloadJson(data, filename) {
   link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url);
 }
 
-function downloadReport(csv = readExamReportCsv(reportStorage, exam) || createReportCsv(exam, getStoredRecords())) {
+function downloadReport(csv = createReportCsv(exam, getStoredRecords())) {
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
   const link = document.createElement("a");
   link.href = url;
@@ -357,46 +343,6 @@ function startNewAttempt() {
   updateHistoryStorageSummary();
   showView("ready-view");
   document.getElementById("exam-title").focus({ preventScroll: true });
-}
-
-function updateDirectoryStorageStatus(message) {
-  const status = document.getElementById("directory-storage-status");
-  if (message) status.textContent = message;
-  else if (reportDirectoryHandle) status.textContent = `자동 저장 디렉터리: ${reportDirectoryHandle.name}`;
-  else if (typeof window.showDirectoryPicker !== "function") status.textContent = "이 브라우저는 디렉터리 자동 저장을 지원하지 않습니다. 수동 CSV 저장을 사용하세요.";
-  else status.textContent = "자동 저장 디렉터리를 선택하면 응시자별 CSV를 저장 창 없이 갱신합니다.";
-}
-
-async function selectReportDirectory() {
-  if (typeof window.showDirectoryPicker !== "function") {
-    updateDirectoryStorageStatus();
-    return;
-  }
-  try {
-    const handle = await window.showDirectoryPicker({ id: "candidate-reports", mode: "readwrite" });
-    if (await requestDirectoryPermission(handle) !== "granted") {
-      updateDirectoryStorageStatus("선택한 디렉터리의 쓰기 권한이 승인되지 않았습니다.");
-      return;
-    }
-    reportDirectoryHandle = handle;
-    try {
-      await saveReportDirectoryHandle(handle);
-      updateDirectoryStorageStatus();
-    } catch {
-      updateDirectoryStorageStatus(`자동 저장 디렉터리: ${handle.name} (현재 실행 중에만 유지)`);
-    }
-  } catch (error) {
-    if (error?.name !== "AbortError") updateDirectoryStorageStatus("자동 저장 디렉터리를 선택하지 못했습니다.");
-  }
-}
-
-async function restoreReportDirectory() {
-  try {
-    reportDirectoryHandle = await loadReportDirectoryHandle();
-  } catch {
-    reportDirectoryHandle = null;
-  }
-  updateDirectoryStorageStatus();
 }
 
 fileInput.addEventListener("change", () => loadSelectedFile(fileInput.files[0]));
@@ -456,10 +402,70 @@ document.getElementById("submit-button").addEventListener("click", () => openSub
 document.getElementById("confirm-submit").addEventListener("click", () => { void finalizeSubmission(); });
 document.getElementById("download-button").addEventListener("click", () => downloadReport());
 document.getElementById("report-mode").addEventListener("change", (event) => { reportMode = event.currentTarget.value; renderReport(getStoredRecords()); });
-document.getElementById("backup-clear-button").addEventListener("click", backupAndClearCurrentHistory);
-document.getElementById("clear-all-button").addEventListener("click", clearAllHistory);
 document.getElementById("print-button").addEventListener("click", () => window.print());
-document.getElementById("select-directory-button").addEventListener("click", () => { void selectReportDirectory(); });
 document.getElementById("new-attempt-button").addEventListener("click", startNewAttempt);
+document.getElementById("certificate-download-button").addEventListener("click", () => {
+  if (lastCertificateResult?.certificate_path) window.open(`/${lastCertificateResult.certificate_path}`, "_blank", "noopener");
+});
+document.getElementById("show-verify-button").addEventListener("click", () => showView("verify-view"));
+document.getElementById("show-admin-button").addEventListener("click", () => { showView("admin-view"); void loadAdminResults(); });
+document.getElementById("verify-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const output = document.getElementById("verify-result");
+  try {
+    const value = await verifyCertificate(document.getElementById("verify-cert-id").value.trim());
+    output.textContent = [
+      `인증 상태: ${{ VALID: "유효", EXPIRED: "만료", CANCELLED: "취소", ISSUE_FAILED: "발행 실패", ISSUE_PENDING: "발행 중" }[value.cert_status] || value.cert_status}`,
+      `성명: ${value.employee_name}`, `사번: ${value.employee_id}`, `부서: ${value.department || "-"}`,
+      `평가명: ${value.exam_name}`, `평가일자: ${value.exam_date}`, `점수: ${value.score}`,
+      `판정: ${value.pass_status}`, `등급: ${value.grade}`, `유효기간: ${value.valid_from || "-"} ~ ${value.valid_to || "-"}`,
+      `인증서 경로: ${value.certificate_path || "-"}`, `SHA-256: ${value.certificate_hash || "-"}`
+    ].join("\n");
+  } catch (error) {
+    output.textContent = error instanceof Error ? error.message : "조회하지 못했습니다.";
+  }
+});
+
+function adminFilters() {
+  return Object.fromEntries(new FormData(document.getElementById("admin-search-form")));
+}
+
+async function loadAdminResults() {
+  const body = document.getElementById("admin-results-body");
+  try {
+    const results = await searchResults(adminFilters());
+    body.replaceChildren(...results.map((record) => {
+      const row = document.createElement("tr");
+      [record.exam_date, record.employee_name, record.employee_id, record.cert_id || "-", record.score, record.grade, record.pass_status, record.cert_status || "-"].forEach((value) => {
+        const cell = document.createElement("td"); cell.textContent = value; row.append(cell);
+      });
+      const action = document.createElement("td");
+      if (record.cert_id) {
+        const reissue = document.createElement("button");
+        reissue.type = "button"; reissue.textContent = "재발행";
+        reissue.addEventListener("click", async () => {
+          const url = new URL(`/api/certificates/${encodeURIComponent(record.cert_id)}`, window.location.origin).href;
+          const png = await createCertificatePng(record, url);
+          await uploadCertificate(record.cert_id, png);
+          await loadAdminResults();
+        });
+        const cancel = document.createElement("button");
+        cancel.type = "button"; cancel.textContent = "취소";
+        cancel.addEventListener("click", async () => {
+          if (!window.confirm(`${record.cert_id} 인증을 취소할까요?`)) return;
+          await cancelCertificate(record.cert_id, "관리자 화면에서 취소");
+          await loadAdminResults();
+        });
+        action.append(reissue, cancel);
+      }
+      row.append(action);
+      return row;
+    }));
+  } catch (error) {
+    body.replaceChildren();
+    announce(error instanceof Error ? error.message : "관리 결과를 조회하지 못했습니다.");
+  }
+}
+document.getElementById("admin-search-form").addEventListener("submit", (event) => { event.preventDefault(); void loadAdminResults(); });
+document.getElementById("admin-export-button").addEventListener("click", () => { window.location.href = exportResultsCsvUrl(adminFilters()); });
 for (const button of document.querySelectorAll(".home-button")) button.addEventListener("click", navigateHome);
-void restoreReportDirectory();

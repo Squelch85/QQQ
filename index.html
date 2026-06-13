@@ -19,11 +19,13 @@
       <div class="hero-copy">
         <p class="eyebrow">INSPECTOR QUALIFICATION</p>
         <h1 id="load-title">검사원<br><em>평가 시험</em></h1>
-        <p class="lead">40개 필기 문항을 응시하고 즉시 채점합니다. 같은 브라우저에서 누적된 응시 결과와 문항별 오답률을 확인할 수 있습니다.</p>
+        <p class="lead">필기 문항을 응시하고 즉시 채점합니다. 결과는 SQLite DB에 저장되며 합격자는 QR 인증서가 자동 발행됩니다.</p>
         <div class="hero-actions">
           <button id="resume-exam-button" class="primary" hidden>현재 시험 계속 <span aria-hidden="true">→</span></button>
           <button id="default-exam-button" class="primary">기본 시험 시작 <span aria-hidden="true">→</span></button>
           <button id="show-converter-button" class="secondary">문항 JSON 변환</button>
+          <button id="show-verify-button" class="secondary">인증 ID 검증</button>
+          <button id="show-admin-button" class="secondary">결과 관리</button>
           <label class="secondary button-label" for="report-file">CSV 리포트 불러오기</label>
           <input id="report-file" type="file" accept="text/csv,.csv">
         </div>
@@ -70,17 +72,14 @@
           <label>성명 <span aria-hidden="true">*</span><input id="candidate-name" name="name" required maxlength="50" autocomplete="name"></label>
           <label>사번 <span aria-hidden="true">*</span><input id="candidate-id" name="employeeId" required maxlength="50"></label>
           <label>부서<input id="candidate-department" name="department" maxlength="80"></label>
+          <label>공정명<input name="processName" maxlength="80"></label>
+          <label>평가 담당자<input name="evaluator" maxlength="80"></label>
+          <label>승인자<input name="approver" maxlength="80"></label>
         </div>
-        <p class="privacy-note">입력 정보와 시험 결과는 시험 ID와 버전별로 이 브라우저에 자동 누적됩니다. 기록 디렉터리를 한 번 지정하면 제출할 때 응시자별 누적 CSV를 저장 창 없이 갱신합니다.</p>
+        <p class="privacy-note">입력 정보와 시험 결과는 로컬 SQLite DB에 저장됩니다. QR 코드에는 개인정보 대신 인증 ID 검증 주소만 포함됩니다.</p>
         <div class="history-management" aria-labelledby="history-management-title">
-          <h3 id="history-management-title">시험 기록 관리</h3>
-          <p id="history-storage-summary">저장된 기록을 확인하는 중입니다.</p>
-          <p id="directory-storage-status" class="storage-status" role="status">자동 저장 디렉터리를 확인하는 중입니다.</p>
-          <div class="compact-actions">
-            <button id="select-directory-button" class="secondary" type="button">자동 저장 디렉터리 선택</button>
-            <button id="backup-clear-button" class="secondary" type="button">CSV 백업 후 현재 기록 삭제</button>
-            <button id="clear-all-button" class="text-button danger" type="button">전체 시험 기록 삭제</button>
-          </div>
+          <h3 id="history-management-title">시험 기록 저장</h3>
+          <p id="history-storage-summary">SQLite 저장소를 확인하는 중입니다.</p>
         </div>
         <button id="start-button" class="primary" type="submit">정보 확인 후 시험 시작 <span aria-hidden="true">→</span></button>
         <button class="text-button home-button" type="button">다른 시험 선택</button>
@@ -123,7 +122,8 @@
         <div class="table-wrap"><table><thead><tr><th>응시일시</th><th>성명</th><th>사번</th><th>부서</th><th>점수</th><th>합격 여부</th></tr></thead><tbody id="report-body"></tbody></table></div>
       </section>
       <div class="result-actions">
-        <button id="download-button" class="primary">누적 리포트 CSV 다시 저장</button>
+        <button id="certificate-download-button" class="primary">발행 인증서 열기</button>
+        <button id="download-button" class="secondary">현재 세션 CSV 내보내기</button>
         <button id="print-button" class="secondary">인쇄</button>
         <button id="new-attempt-button" class="text-button">같은 시험 새 응시</button>
         <button class="text-button home-button">다른 시험 선택</button>
@@ -141,6 +141,32 @@
         <div class="table-wrap"><table><thead><tr><th>응시일시</th><th>성명</th><th>사번</th><th>부서</th><th>점수</th><th>합격 여부</th></tr></thead><tbody id="loaded-report-body"></tbody></table></div>
       </section>
       <div class="result-actions"><button class="text-button home-button">처음으로</button></div>
+    </section>
+
+    <section id="verify-view" class="panel" hidden aria-labelledby="verify-title">
+      <p class="eyebrow">CERTIFICATE VERIFICATION</p>
+      <h1 id="verify-title">인증 ID 검증</h1>
+      <form id="verify-form" class="inline-search">
+        <label>인증 ID<input id="verify-cert-id" required placeholder="GRR-WT-26-000001-XXXX"></label>
+        <button class="primary">DB 원본 조회</button>
+      </form>
+      <pre id="verify-result" class="verification-result" aria-live="polite">인증 ID를 입력해 주세요.</pre>
+      <button class="text-button home-button">처음으로</button>
+    </section>
+
+    <section id="admin-view" class="panel result-panel" hidden aria-labelledby="admin-title">
+      <p class="eyebrow">RESULT MANAGEMENT</p>
+      <h1 id="admin-title">시험 결과 관리</h1>
+      <form id="admin-search-form" class="form-grid">
+        <label>검색<input name="search" placeholder="사번, 성명, 인증 ID"></label>
+        <label>시작일<input name="date_from" type="date"></label>
+        <label>종료일<input name="date_to" type="date"></label>
+        <label>판정<select name="pass_status"><option value="">전체</option><option value="PASS">PASS</option><option value="FAIL">FAIL</option></select></label>
+        <button class="primary">조회</button>
+        <button id="admin-export-button" class="secondary" type="button">조회 조건 CSV 내보내기</button>
+      </form>
+      <div class="table-wrap"><table><thead><tr><th>응시일시</th><th>성명</th><th>사번</th><th>인증 ID</th><th>점수</th><th>등급</th><th>판정</th><th>인증 상태</th><th>관리</th></tr></thead><tbody id="admin-results-body"></tbody></table></div>
+      <button class="text-button home-button">처음으로</button>
     </section>
   </main>
 

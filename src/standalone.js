@@ -1850,273 +1850,281 @@ function parseReportCsv(text) {
   return { schemaVersion, generatedAt, ...buildExamReport(exam, records, "allAttempts") };
 }
 
-// ---- src/report-storage.js ----
-const REPORT_STORAGE_PREFIX = "exam-report:";
-const STORAGE_WARNING_RECORDS = 1_000;
-const STORAGE_WARNING_BYTES = 2 * 1024 * 1024;
+// ---- src/certificate.js ----
+const CERTIFICATE_WIDTH = 1600;
+const CERTIFICATE_HEIGHT = 900;
 
-function getExamReportStorageKey(examId, revision = 1) {
-  return `${REPORT_STORAGE_PREFIX}${examId}:${revision}`;
-}
-
-function getLegacyExamReportStorageKey(examId) {
-  return `${REPORT_STORAGE_PREFIX}${examId}`;
-}
-
-function readStoredValue(storage, key) {
-  try {
-    return storage?.getItem(key) || "";
-  } catch {
-    return "";
+function gfMultiply(left, right) {
+  let result = 0;
+  while (right) {
+    if (right & 1) result ^= left;
+    left = left & 0x80 ? (left << 1) ^ 0x11d : left << 1;
+    right >>= 1;
   }
+  return result;
 }
 
-function readLegacyJsonRecords(value) {
-  try {
-    const records = JSON.parse(value);
-    return Array.isArray(records) ? records : [];
-  } catch {
-    return [];
+function reedSolomon(data, count) {
+  let generator = [1];
+  let root = 1;
+  for (let index = 0; index < count; index += 1) {
+    generator = [...generator, 0].map((value, position, values) =>
+      value ^ (position ? gfMultiply(values[position - 1], root) : 0));
+    root = gfMultiply(root, 2);
   }
-}
-
-function reportMatchesExam(report, exam) {
-  const reportQuestions = report.questionStats.map(({ questionId, prompt }) => [questionId, prompt]);
-  const examQuestions = exam.questions.map(({ id, prompt }) => [id, prompt]);
-  return report.examId === exam.id
-    && report.examRevision === (exam.revision ?? 1)
-    && report.examTitle === exam.title
-    && report.passingScore === (exam.passingScore ?? 80)
-    && JSON.stringify(reportQuestions) === JSON.stringify(examQuestions);
-}
-
-function migrateLegacyStorage(storage, exam) {
-  if (!storage || (exam.revision ?? 1) !== 1) return "";
-  const legacyKey = getLegacyExamReportStorageKey(exam.id);
-  const value = readStoredValue(storage, legacyKey);
-  if (!value) return "";
-
-  let csv = value;
-  if (value.trimStart().startsWith("[")) csv = createReportCsv(exam, readLegacyJsonRecords(value));
-  else {
-    try {
-      const report = parseReportCsv(value);
-      if (!reportMatchesExam(report, exam)) return "";
-      csv = createReportCsv(exam, report.attempts);
-    } catch {
-      return "";
-    }
+  const remainder = Array(count).fill(0);
+  for (const value of data) {
+    const factor = value ^ remainder.shift();
+    remainder.push(0);
+    for (let index = 0; index < count; index += 1) remainder[index] ^= gfMultiply(generator[index + 1], factor);
   }
-
-  try {
-    storage.setItem(getExamReportStorageKey(exam.id, exam.revision), csv);
-    storage.removeItem(legacyKey);
-    return csv;
-  } catch {
-    return value;
-  }
+  return remainder;
 }
 
-function readExamValue(storage, exam) {
-  const key = getExamReportStorageKey(exam.id, exam.revision);
-  return readStoredValue(storage, key) || migrateLegacyStorage(storage, exam);
+function appendBits(target, value, length) {
+  for (let bit = length - 1; bit >= 0; bit -= 1) target.push((value >>> bit) & 1);
 }
 
-function readExamReportCsv(storage, exam) {
-  const value = readExamValue(storage, exam);
-  if (!value || value.trimStart().startsWith("[")) return "";
-  try {
-    const report = parseReportCsv(value);
-    return reportMatchesExam(report, exam) ? value : "";
-  } catch {
-    return "";
-  }
-}
+function makeQrCode(value) {
+  const bytes = [...new TextEncoder().encode(value)];
+  if (bytes.length > 106) throw new Error("QR 코드 값이 너무 깁니다.");
+  const bits = [];
+  appendBits(bits, 0b0100, 4);
+  appendBits(bits, bytes.length, 8);
+  for (const byte of bytes) appendBits(bits, byte, 8);
+  appendBits(bits, 0, Math.min(4, 864 - bits.length));
+  while (bits.length % 8) bits.push(0);
+  const data = [];
+  for (let index = 0; index < bits.length; index += 8) data.push(Number.parseInt(bits.slice(index, index + 8).join(""), 2));
+  for (let pad = 0; data.length < 108; pad += 1) data.push(pad % 2 ? 0x11 : 0xec);
+  const codewords = [...data, ...reedSolomon(data, 26)];
+  const size = 37;
+  const modules = Array.from({ length: size }, () => Array(size).fill(null));
 
-function readExamReportRecords(storage, exam) {
-  const value = readExamValue(storage, exam);
-  if (!value) return [];
-  if (value.trimStart().startsWith("[")) return readLegacyJsonRecords(value);
-  try {
-    const report = parseReportCsv(value);
-    return reportMatchesExam(report, exam) ? report.attempts : [];
-  } catch {
-    return [];
-  }
-}
-
-function storageErrorType(error) {
-  if (error?.name === "QuotaExceededError") return "quota_exceeded";
-  if (error?.name === "SecurityError") return "access_denied";
-  return "storage_unavailable";
-}
-
-function getReportStorageUsage(csv, recordCount) {
-  const bytes = new TextEncoder().encode(csv).byteLength;
-  return {
-    bytes,
-    recordCount,
-    warning: recordCount >= STORAGE_WARNING_RECORDS || bytes >= STORAGE_WARNING_BYTES
+  const setFunction = (row, column, dark) => {
+    if (row >= 0 && row < size && column >= 0 && column < size) modules[row][column] = dark;
   };
-}
-
-function writeExamReportRecords(storage, exam, records, generatedAt) {
-  const csv = createReportCsv(exam, records, generatedAt);
-  const usage = getReportStorageUsage(csv, records.length);
-  if (!storage) return { csv, stored: false, errorType: "storage_unavailable", usage };
-  try {
-    storage.setItem(getExamReportStorageKey(exam.id, exam.revision), csv);
-    return { csv, stored: true, errorType: null, usage };
-  } catch (error) {
-    return { csv, stored: false, errorType: storageErrorType(error), usage };
-  }
-}
-
-function appendExamReportRecord(storage, exam, record, generatedAt) {
-  const records = readExamReportRecords(storage, exam);
-  records.push(record);
-  const state = writeExamReportRecords(storage, exam, records, generatedAt);
-  return { records, ...state };
-}
-
-function clearExamReportRecords(storage, examId, revision = 1) {
-  if (!storage) return false;
-  try {
-    storage.removeItem(getExamReportStorageKey(examId, revision));
-    if (revision === 1) storage.removeItem(getLegacyExamReportStorageKey(examId));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function clearAllExamReportRecords(storage) {
-  if (!storage) return { cleared: false, count: 0 };
-  try {
-    const keys = [];
-    for (let index = 0; index < storage.length; index += 1) {
-      const key = storage.key(index);
-      if (key?.startsWith(REPORT_STORAGE_PREFIX)) keys.push(key);
+  const finder = (row, column) => {
+    for (let y = -1; y <= 7; y += 1) for (let x = -1; x <= 7; x += 1) {
+      const dark = x >= 0 && x <= 6 && y >= 0 && y <= 6
+        && (x === 0 || x === 6 || y === 0 || y === 6 || (x >= 2 && x <= 4 && y >= 2 && y <= 4));
+      setFunction(row + y, column + x, dark);
     }
-    for (const key of keys) storage.removeItem(key);
-    return { cleared: true, count: keys.length };
-  } catch {
-    return { cleared: false, count: 0 };
+  };
+  finder(0, 0); finder(0, size - 7); finder(size - 7, 0);
+  for (let index = 8; index < size - 8; index += 1) {
+    if (modules[6][index] === null) modules[6][index] = index % 2 === 0;
+    if (modules[index][6] === null) modules[index][6] = index % 2 === 0;
   }
-}
+  for (let y = -2; y <= 2; y += 1) for (let x = -2; x <= 2; x += 1) {
+    setFunction(30 + y, 30 + x, Math.max(Math.abs(x), Math.abs(y)) !== 1);
+  }
+  const format = 0x77c4;
+  for (let index = 0; index < 15; index += 1) {
+    const dark = ((format >>> index) & 1) !== 0;
+    const first = index < 6 ? [index, 8] : index < 8 ? [index + 1, 8] : index === 8 ? [8, 7] : [8, 14 - index];
+    const second = index < 8 ? [8, size - index - 1] : [size - 15 + index, 8];
+    setFunction(first[0], first[1], dark);
+    setFunction(second[0], second[1], dark);
+  }
+  setFunction(size - 8, 8, true);
 
-// ---- src/directory-report-storage.js ----
-const DATABASE_NAME = "qqq-exam-settings";
-const DATABASE_VERSION = 1;
-const STORE_NAME = "file-handles";
-const DIRECTORY_HANDLE_KEY = "candidate-report-directory";
-
-function openDatabase(indexedDb) {
-  return new Promise((resolve, reject) => {
-    if (!indexedDb) {
-      reject(new Error("IndexedDB를 사용할 수 없습니다."));
-      return;
+  const payload = codewords.flatMap((byte) => Array.from({ length: 8 }, (_, bit) => (byte >>> (7 - bit)) & 1));
+  let payloadIndex = 0;
+  let upward = true;
+  for (let right = size - 1; right >= 1; right -= 2) {
+    if (right === 6) right -= 1;
+    for (let offset = 0; offset < size; offset += 1) {
+      const row = upward ? size - 1 - offset : offset;
+      for (let columnOffset = 0; columnOffset < 2; columnOffset += 1) {
+        const column = right - columnOffset;
+        if (modules[row][column] !== null) continue;
+        const raw = payload[payloadIndex++] || 0;
+        modules[row][column] = Boolean(raw ^ ((row + column) % 2 === 0));
+      }
     }
-    const request = indexedDb.open(DATABASE_NAME, DATABASE_VERSION);
-    request.addEventListener("upgradeneeded", () => {
-      if (!request.result.objectStoreNames.contains(STORE_NAME)) request.result.createObjectStore(STORE_NAME);
-    });
-    request.addEventListener("success", () => resolve(request.result));
-    request.addEventListener("error", () => reject(request.error ?? new Error("디렉터리 설정을 열 수 없습니다.")));
-  });
+    upward = !upward;
+  }
+  return modules;
 }
 
-function runTransaction(indexedDb, mode, operation) {
-  return openDatabase(indexedDb).then((database) => new Promise((resolve, reject) => {
-    const transaction = database.transaction(STORE_NAME, mode);
-    const request = operation(transaction.objectStore(STORE_NAME));
-    request.addEventListener("success", () => resolve(request.result ?? null));
-    request.addEventListener("error", () => reject(request.error ?? new Error("디렉터리 설정을 저장할 수 없습니다.")));
-    transaction.addEventListener("complete", () => database.close());
-    transaction.addEventListener("abort", () => database.close());
+function drawField(context, label, value, x, y) {
+  context.fillStyle = "#64748b";
+  context.font = "22px sans-serif";
+  context.fillText(label, x, y);
+  context.fillStyle = "#172033";
+  context.font = "bold 28px sans-serif";
+  context.fillText(String(value || "-"), x + 145, y);
+}
+
+function drawQr(context, value, x, y, size) {
+  const modules = makeQrCode(value);
+  const quiet = 4;
+  const cell = size / (modules.length + quiet * 2);
+  context.fillStyle = "#fff";
+  context.fillRect(x, y, size, size);
+  context.fillStyle = "#111827";
+  modules.forEach((row, rowIndex) => row.forEach((dark, columnIndex) => {
+    if (dark) context.fillRect(x + (columnIndex + quiet) * cell, y + (rowIndex + quiet) * cell, Math.ceil(cell), Math.ceil(cell));
   }));
 }
 
-function loadReportDirectoryHandle(indexedDb = globalThis.indexedDB) {
-  return runTransaction(indexedDb, "readonly", (store) => store.get(DIRECTORY_HANDLE_KEY));
+async function createCertificatePng(result, verificationUrl) {
+  const canvas = document.createElement("canvas");
+  canvas.width = CERTIFICATE_WIDTH;
+  canvas.height = CERTIFICATE_HEIGHT;
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#f8fafc";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.strokeStyle = "#17345f";
+  context.lineWidth = 12;
+  context.strokeRect(30, 30, canvas.width - 60, canvas.height - 60);
+  context.strokeStyle = "#c6a15b";
+  context.lineWidth = 3;
+  context.strokeRect(50, 50, canvas.width - 100, canvas.height - 100);
+
+  context.textAlign = "center";
+  context.fillStyle = "#17345f";
+  context.font = "bold 54px sans-serif";
+  context.fillText("검사원 자격인증 필기평가 인증서", 800, 130);
+  context.font = "28px sans-serif";
+  context.fillStyle = "#64748b";
+  context.fillText("Gauge R&R 이해도 평가", 800, 175);
+  context.textAlign = "left";
+
+  drawField(context, "성명", result.employee_name, 120, 250);
+  drawField(context, "사번", result.employee_id, 820, 250);
+  drawField(context, "부서", result.department, 120, 300);
+  drawField(context, "공정명", result.process_name, 820, 300);
+  drawField(context, "평가명", result.exam_name, 120, 350);
+  drawField(context, "평가일자", result.exam_date.slice(0, 10), 820, 350);
+  drawField(context, "시험버전", result.exam_version, 120, 400);
+  drawField(context, "문항 수", `${result.total_questions}문항`, 820, 400);
+  drawField(context, "취득점수", `${result.score}점`, 120, 450);
+  drawField(context, "합격기준", `${result.pass_score}점`, 820, 450);
+  drawField(context, "판정 / 등급", `${result.pass_status} / ${result.grade}`, 120, 500);
+  drawField(context, "유효기간", `${result.valid_from} ~ ${result.valid_to}`, 820, 500);
+
+  context.fillStyle = "#334155";
+  context.font = "23px sans-serif";
+  const lines = [
+    "상기 인원은 검사원 자격인증을 위한 Gauge R&R 필기평가에서 요구 기준을 충족하였으므로,",
+    "측정시스템분석 및 검사 신뢰성 관리에 대한 기본 이해도를 보유하였음을 인증합니다.",
+    "본 인증은 필기평가 결과에 대한 인증이며, 최종 자격은 공정 교육·실기평가·관리자 승인 충족 시 부여됩니다.",
+    "본 인증서는 검사 인증툴의 원본 평가기록과 인증 ID 조회 결과가 일치할 때 유효합니다."
+  ];
+  lines.forEach((line, index) => context.fillText(line, 120, 570 + index * 35));
+  drawField(context, "평가 담당자", result.evaluator, 120, 750);
+  drawField(context, "승인자", result.approver, 620, 750);
+  context.fillStyle = "#17345f";
+  context.font = "bold 25px monospace";
+  context.fillText(`인증 ID  ${result.cert_id}`, 120, 815);
+  context.fillStyle = "#64748b";
+  context.font = "20px sans-serif";
+  context.fillText(`발행일자 ${result.issued_date}`, 830, 815);
+  drawQr(context, verificationUrl, 1330, 650, 170);
+
+  return new Promise((resolve, reject) => canvas.toBlob(
+    (blob) => blob ? resolve(blob) : reject(new Error("PNG 이미지를 만들지 못했습니다.")),
+    "image/png"
+  ));
 }
 
-function saveReportDirectoryHandle(handle, indexedDb = globalThis.indexedDB) {
-  return runTransaction(indexedDb, "readwrite", (store) => store.put(handle, DIRECTORY_HANDLE_KEY));
+// ---- src/result-api.js ----
+async function request(path, options) {
+  const response = await fetch(path, options);
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || "DB 서버 요청에 실패했습니다.");
+  return payload;
 }
 
-function sanitizeFilenamePart(value, fallback = "unknown") {
-  const sanitized = String(value ?? "")
-    .normalize("NFKC")
-    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_")
-    .replace(/[. ]+$/g, "")
-    .trim();
-  return (sanitized || fallback).slice(0, 80);
+function makeResultPayload(candidate, result, exam) {
+  const correctCount = result.items.filter((item) => item.status === "correct").length;
+  const examDate = result.submittedAt;
+  const issuedDate = examDate.slice(0, 10);
+  const validTo = new Date(examDate);
+  validTo.setUTCFullYear(validTo.getUTCFullYear() + Number(exam.certificateValidityYears ?? 1));
+  return {
+    exam_type: exam.examType || "GRR-WT",
+    exam_name: exam.certificateExamName || exam.title,
+    exam_version: String(exam.revision ?? 1),
+    employee_id: candidate.employeeId,
+    employee_name: candidate.name,
+    department: candidate.department || "",
+    process_name: candidate.processName || "",
+    exam_date: examDate,
+    total_questions: result.items.length,
+    correct_count: correctCount,
+    wrong_count: result.items.length - correctCount,
+    score: result.score,
+    pass_score: exam.passingScore ?? result.maxScore * 0.8,
+    issued_date: issuedDate,
+    valid_from: issuedDate,
+    valid_to: validTo.toISOString().slice(0, 10),
+    evaluator: candidate.evaluator || "",
+    approver: candidate.approver || ""
+  };
 }
 
-function getCandidateReportFilename(exam, candidate) {
-  const employeeId = sanitizeFilenamePart(candidate.employeeId, "no-id");
-  const name = sanitizeFilenamePart(candidate.name, "no-name");
-  const examId = sanitizeFilenamePart(exam.id, "exam");
-  return `${employeeId}_${name}__${examId}_v${exam.revision ?? 1}.csv`;
+async function saveExamResult(candidate, result, exam) {
+  return (await request("/api/results", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(makeResultPayload(candidate, result, exam))
+  })).result;
 }
 
-function selectCandidateRecords(records, candidate) {
-  const employeeId = String(candidate.employeeId ?? "");
-  return records.filter((record) => String(record.candidate?.employeeId ?? "") === employeeId);
+async function uploadCertificate(certId, blob) {
+  return (await request(`/api/certificates/${encodeURIComponent(certId)}/image`, {
+    method: "POST",
+    headers: { "Content-Type": "image/png" },
+    body: blob
+  })).result;
 }
 
-async function getDirectoryPermission(handle) {
-  if (!handle?.queryPermission) return "denied";
-  try {
-    return await handle.queryPermission({ mode: "readwrite" });
-  } catch {
-    return "denied";
-  }
+async function markCertificateIssueFailed(certId, reason) {
+  await request(`/api/certificates/${encodeURIComponent(certId)}/issue-failed`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason })
+  });
 }
 
-async function requestDirectoryPermission(handle) {
-  const current = await getDirectoryPermission(handle);
-  if (current === "granted" || !handle?.requestPermission) return current;
-  try {
-    return await handle.requestPermission({ mode: "readwrite" });
-  } catch {
-    return "denied";
-  }
+async function verifyCertificate(certId) {
+  return (await request(`/api/certificates/${encodeURIComponent(certId)}`)).result;
 }
 
-async function writeCandidateReport(handle, exam, records, candidate, generatedAt) {
-  if (!handle) return { saved: false, reason: "directory_not_selected" };
-  if (await getDirectoryPermission(handle) !== "granted") return { saved: false, reason: "permission_required" };
+async function searchResults(parameters = {}) {
+  const query = new URLSearchParams(Object.entries(parameters).filter(([, value]) => value));
+  return (await request(`/api/results?${query}`)).results;
+}
 
-  const candidateRecords = selectCandidateRecords(records, candidate);
-  const filename = getCandidateReportFilename(exam, candidate);
-  try {
-    const fileHandle = await handle.getFileHandle(filename, { create: true });
-    const writable = await fileHandle.createWritable();
-    await writable.write(createReportCsv(exam, candidateRecords, generatedAt));
-    await writable.close();
-    return { saved: true, filename, recordCount: candidateRecords.length };
-  } catch (error) {
-    return { saved: false, reason: "write_failed", error };
-  }
+async function cancelCertificate(certId, reason) {
+  return (await request(`/api/certificates/${encodeURIComponent(certId)}/cancel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason })
+  })).result;
+}
+
+function exportResultsCsvUrl(parameters = {}) {
+  const query = new URLSearchParams(Object.entries(parameters).filter(([, value]) => value));
+  return `/api/results.csv?${query}`;
+}
+
+// 기존 CSV 포맷이 필요한 관리용 선택 내보내기에서만 사용한다.
+function createLegacyReportExport(exam, records) {
+  return createReportCsv(exam, records);
 }
 
 // ---- src/app.js ----
-const viewIds = ["load-view", "converter-view", "ready-view", "exam-view", "result-view", "report-view"];
+const viewIds = ["load-view", "converter-view", "ready-view", "exam-view", "result-view", "report-view", "verify-view", "admin-view"];
 const views = viewIds.map((id) => document.getElementById(id));
 const fileInput = document.getElementById("exam-file");
 const fileError = document.getElementById("file-error");
 const timer = document.getElementById("timer");
 const liveStatus = document.getElementById("live-status");
 const submitDialog = document.getElementById("submit-dialog");
-const reportStorage = (() => {
-  try {
-    return window.localStorage;
-  } catch {
-    return null;
-  }
-})();
 let exam = null;
 let publicExam = null;
 let attempt = null;
@@ -2125,7 +2133,8 @@ let currentQuestionIndex = 0;
 let timerId = null;
 let deadline = null;
 let reportMode = "latestPerEmployee";
-let reportDirectoryHandle = null;
+let runtimeRecords = [];
+let lastCertificateResult = null;
 
 function showView(id) {
   for (const view of views) view.hidden = view.id !== id;
@@ -2289,11 +2298,13 @@ function statusLabel(status) {
 }
 
 function getStoredRecords() {
-  return readExamReportRecords(reportStorage, exam);
+  return runtimeRecords;
 }
 
 function storeResult(result) {
-  return appendExamReportRecord(reportStorage, exam, makeAttemptRecord(candidate, result, exam));
+  const record = makeAttemptRecord(candidate, result, exam);
+  runtimeRecords.push(record);
+  return record;
 }
 
 function renderReportData(report, target = "result") {
@@ -2364,18 +2375,30 @@ async function finalizeSubmission() {
   stopTimer();
   attempt.submit();
   const result = attempt.grade();
-  const reportState = storeResult(result);
-  const directoryState = await writeCandidateReport(reportDirectoryHandle, exam, reportState.records, candidate);
+  storeResult(result);
   const status = document.getElementById("report-storage-status");
-  const browserStatus = reportState.stored
-    ? `브라우저 저장 완료 · ${reportState.usage.recordCount}건 · ${formatBytes(reportState.usage.bytes)}`
-    : "브라우저 저장소에 보관하지 못했습니다. 수동으로 CSV를 저장하세요.";
-  if (directoryState.saved) status.textContent = `${browserStatus} · ${directoryState.filename} 자동 저장 (${directoryState.recordCount}건)`;
-  else if (directoryState.reason === "permission_required") status.textContent = `${browserStatus} · 자동 저장 권한이 필요합니다. 시험 준비 화면에서 디렉터리를 다시 선택하세요.`;
-  else if (directoryState.reason === "write_failed") status.textContent = `${browserStatus} · 응시자별 CSV 자동 저장에 실패했습니다.`;
-  else if (reportState.usage.warning) status.textContent = `${browserStatus} · CSV 백업 후 이전 기록 정리를 권장합니다.`;
-  else status.textContent = `${browserStatus} · 자동 저장 디렉터리가 지정되지 않았습니다.`;
-  renderResult(result, reportState.records);
+  try {
+    let saved = await saveExamResult(candidate, result, exam);
+    status.textContent = `SQLite DB 저장 완료 · 결과 번호 ${saved.result_id}`;
+    lastCertificateResult = null;
+    if (saved.cert_id) {
+      try {
+        const verificationUrl = new URL(`/api/certificates/${encodeURIComponent(saved.cert_id)}`, window.location.origin).href;
+        const png = await createCertificatePng(saved, verificationUrl);
+        saved = await uploadCertificate(saved.cert_id, png);
+        lastCertificateResult = saved;
+        status.textContent += ` · 인증서 자동 발행 완료 (${saved.cert_id})`;
+      } catch (error) {
+        await markCertificateIssueFailed(saved.cert_id, error instanceof Error ? error.message : "인증서 생성 실패");
+        status.textContent += ` · 인증서 생성 실패 (DB 결과는 보존됨, ${saved.cert_id})`;
+      }
+    } else {
+      status.textContent += " · 인증서 발행 기준 미충족";
+    }
+  } catch (error) {
+    status.textContent = error instanceof Error ? `DB 저장 실패: ${error.message}` : "DB 저장에 실패했습니다.";
+  }
+  renderResult(result, runtimeRecords);
 }
 
 function formatBytes(bytes) {
@@ -2387,29 +2410,7 @@ function formatBytes(bytes) {
 function updateHistoryStorageSummary() {
   const summary = document.getElementById("history-storage-summary");
   if (!summary || !exam) return;
-  const records = getStoredRecords();
-  const csv = readExamReportCsv(reportStorage, exam) || (records.length ? createReportCsv(exam, records) : "");
-  const usage = getReportStorageUsage(csv, records.length);
-  summary.textContent = `${exam.title} · 버전 ${exam.revision} · ${records.length}건 · ${formatBytes(usage.bytes)}`;
-  document.getElementById("backup-clear-button").disabled = records.length === 0;
-}
-
-function backupAndClearCurrentHistory() {
-  const records = getStoredRecords();
-  if (records.length === 0) return;
-  downloadReport();
-  const message = `${exam.title} (ID: ${exam.id}, 버전: ${exam.revision})의 응시 기록 ${records.length}건을 삭제합니다. CSV 다운로드가 시작되었는지 확인하세요. 삭제 후 복구할 수 없습니다.`;
-  if (!window.confirm(message)) return;
-  const cleared = clearExamReportRecords(reportStorage, exam.id, exam.revision);
-  announce(cleared ? "현재 시험 기록을 삭제했습니다." : "시험 기록을 삭제하지 못했습니다.");
-  updateHistoryStorageSummary();
-}
-
-function clearAllHistory() {
-  if (!window.confirm("이 브라우저의 모든 시험 버전 기록을 삭제합니다. 개별 CSV로 백업하지 않은 기록은 복구할 수 없습니다.")) return;
-  const result = clearAllExamReportRecords(reportStorage);
-  announce(result.cleared ? `시험 기록 저장 키 ${result.count}개를 삭제했습니다.` : "전체 시험 기록을 삭제하지 못했습니다.");
-  updateHistoryStorageSummary();
+  summary.textContent = `${exam.title} · 버전 ${exam.revision} · 제출 결과는 SQLite DB에 원본 저장됩니다.`;
 }
 
 function downloadJson(data, filename) {
@@ -2418,7 +2419,7 @@ function downloadJson(data, filename) {
   link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url);
 }
 
-function downloadReport(csv = readExamReportCsv(reportStorage, exam) || createReportCsv(exam, getStoredRecords())) {
+function downloadReport(csv = createReportCsv(exam, getStoredRecords())) {
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
   const link = document.createElement("a");
   link.href = url;
@@ -2454,46 +2455,6 @@ function startNewAttempt() {
   updateHistoryStorageSummary();
   showView("ready-view");
   document.getElementById("exam-title").focus({ preventScroll: true });
-}
-
-function updateDirectoryStorageStatus(message) {
-  const status = document.getElementById("directory-storage-status");
-  if (message) status.textContent = message;
-  else if (reportDirectoryHandle) status.textContent = `자동 저장 디렉터리: ${reportDirectoryHandle.name}`;
-  else if (typeof window.showDirectoryPicker !== "function") status.textContent = "이 브라우저는 디렉터리 자동 저장을 지원하지 않습니다. 수동 CSV 저장을 사용하세요.";
-  else status.textContent = "자동 저장 디렉터리를 선택하면 응시자별 CSV를 저장 창 없이 갱신합니다.";
-}
-
-async function selectReportDirectory() {
-  if (typeof window.showDirectoryPicker !== "function") {
-    updateDirectoryStorageStatus();
-    return;
-  }
-  try {
-    const handle = await window.showDirectoryPicker({ id: "candidate-reports", mode: "readwrite" });
-    if (await requestDirectoryPermission(handle) !== "granted") {
-      updateDirectoryStorageStatus("선택한 디렉터리의 쓰기 권한이 승인되지 않았습니다.");
-      return;
-    }
-    reportDirectoryHandle = handle;
-    try {
-      await saveReportDirectoryHandle(handle);
-      updateDirectoryStorageStatus();
-    } catch {
-      updateDirectoryStorageStatus(`자동 저장 디렉터리: ${handle.name} (현재 실행 중에만 유지)`);
-    }
-  } catch (error) {
-    if (error?.name !== "AbortError") updateDirectoryStorageStatus("자동 저장 디렉터리를 선택하지 못했습니다.");
-  }
-}
-
-async function restoreReportDirectory() {
-  try {
-    reportDirectoryHandle = await loadReportDirectoryHandle();
-  } catch {
-    reportDirectoryHandle = null;
-  }
-  updateDirectoryStorageStatus();
 }
 
 fileInput.addEventListener("change", () => loadSelectedFile(fileInput.files[0]));
@@ -2553,12 +2514,72 @@ document.getElementById("submit-button").addEventListener("click", () => openSub
 document.getElementById("confirm-submit").addEventListener("click", () => { void finalizeSubmission(); });
 document.getElementById("download-button").addEventListener("click", () => downloadReport());
 document.getElementById("report-mode").addEventListener("change", (event) => { reportMode = event.currentTarget.value; renderReport(getStoredRecords()); });
-document.getElementById("backup-clear-button").addEventListener("click", backupAndClearCurrentHistory);
-document.getElementById("clear-all-button").addEventListener("click", clearAllHistory);
 document.getElementById("print-button").addEventListener("click", () => window.print());
-document.getElementById("select-directory-button").addEventListener("click", () => { void selectReportDirectory(); });
 document.getElementById("new-attempt-button").addEventListener("click", startNewAttempt);
+document.getElementById("certificate-download-button").addEventListener("click", () => {
+  if (lastCertificateResult?.certificate_path) window.open(`/${lastCertificateResult.certificate_path}`, "_blank", "noopener");
+});
+document.getElementById("show-verify-button").addEventListener("click", () => showView("verify-view"));
+document.getElementById("show-admin-button").addEventListener("click", () => { showView("admin-view"); void loadAdminResults(); });
+document.getElementById("verify-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const output = document.getElementById("verify-result");
+  try {
+    const value = await verifyCertificate(document.getElementById("verify-cert-id").value.trim());
+    output.textContent = [
+      `인증 상태: ${{ VALID: "유효", EXPIRED: "만료", CANCELLED: "취소", ISSUE_FAILED: "발행 실패", ISSUE_PENDING: "발행 중" }[value.cert_status] || value.cert_status}`,
+      `성명: ${value.employee_name}`, `사번: ${value.employee_id}`, `부서: ${value.department || "-"}`,
+      `평가명: ${value.exam_name}`, `평가일자: ${value.exam_date}`, `점수: ${value.score}`,
+      `판정: ${value.pass_status}`, `등급: ${value.grade}`, `유효기간: ${value.valid_from || "-"} ~ ${value.valid_to || "-"}`,
+      `인증서 경로: ${value.certificate_path || "-"}`, `SHA-256: ${value.certificate_hash || "-"}`
+    ].join("\n");
+  } catch (error) {
+    output.textContent = error instanceof Error ? error.message : "조회하지 못했습니다.";
+  }
+});
+
+function adminFilters() {
+  return Object.fromEntries(new FormData(document.getElementById("admin-search-form")));
+}
+
+async function loadAdminResults() {
+  const body = document.getElementById("admin-results-body");
+  try {
+    const results = await searchResults(adminFilters());
+    body.replaceChildren(...results.map((record) => {
+      const row = document.createElement("tr");
+      [record.exam_date, record.employee_name, record.employee_id, record.cert_id || "-", record.score, record.grade, record.pass_status, record.cert_status || "-"].forEach((value) => {
+        const cell = document.createElement("td"); cell.textContent = value; row.append(cell);
+      });
+      const action = document.createElement("td");
+      if (record.cert_id) {
+        const reissue = document.createElement("button");
+        reissue.type = "button"; reissue.textContent = "재발행";
+        reissue.addEventListener("click", async () => {
+          const url = new URL(`/api/certificates/${encodeURIComponent(record.cert_id)}`, window.location.origin).href;
+          const png = await createCertificatePng(record, url);
+          await uploadCertificate(record.cert_id, png);
+          await loadAdminResults();
+        });
+        const cancel = document.createElement("button");
+        cancel.type = "button"; cancel.textContent = "취소";
+        cancel.addEventListener("click", async () => {
+          if (!window.confirm(`${record.cert_id} 인증을 취소할까요?`)) return;
+          await cancelCertificate(record.cert_id, "관리자 화면에서 취소");
+          await loadAdminResults();
+        });
+        action.append(reissue, cancel);
+      }
+      row.append(action);
+      return row;
+    }));
+  } catch (error) {
+    body.replaceChildren();
+    announce(error instanceof Error ? error.message : "관리 결과를 조회하지 못했습니다.");
+  }
+}
+document.getElementById("admin-search-form").addEventListener("submit", (event) => { event.preventDefault(); void loadAdminResults(); });
+document.getElementById("admin-export-button").addEventListener("click", () => { window.location.href = exportResultsCsvUrl(adminFilters()); });
 for (const button of document.querySelectorAll(".home-button")) button.addEventListener("click", navigateHome);
-void restoreReportDirectory();
 
 })();

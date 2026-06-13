@@ -1,0 +1,1 @@
+# SQLite, HTTP API, PNG 저장은 Python 표준 라이브러리만 사용합니다.
