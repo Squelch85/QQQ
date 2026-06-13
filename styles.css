@@ -174,3 +174,29 @@ code { padding: 2px 5px; background: #e9e6dc; }
 .verification-result { padding: 22px; white-space: pre-wrap; line-height: 1.8; color: var(--ink); background: #eef5f0; border-left: 4px solid var(--good); }
 #admin-search-form { align-items: end; margin: 24px 0; }
 #admin-results-body button { margin: 2px; padding: 7px 9px; }
+
+.certificate-section { margin: 52px 0 10px; padding: 28px; background: #f7f9f7; border: 1px solid var(--line); }
+.certificate-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.certificate-heading h2 { margin: 0; font-family: Georgia, serif; font-size: 2.3rem; }
+.certificate-badge { padding: 8px 13px; border-radius: 999px; font-size: .8rem; font-weight: 900; }
+.certificate-badge.valid { color: white; background: var(--good); }
+.certificate-badge.issue-failed, .certificate-badge.db-save-failed { color: white; background: var(--bad); }
+.certificate-badge.cancelled, .certificate-badge.expired { color: #332600; background: #e6b94f; }
+.certificate-badge.issue-pending { color: #17345f; background: #dce9f8; }
+.certificate-status-message { min-height: 1.5em; color: var(--muted); font-weight: 800; }
+.certificate-preview-frame { position: relative; width: 100%; max-width: 860px; aspect-ratio: 16 / 9; margin: 22px auto; overflow: hidden; background: #e8ebe9; border: 1px solid #819087; box-shadow: 0 14px 30px rgb(23 35 29 / .18); }
+.certificate-preview-frame.loading::after { content: "인증서 이미지를 생성하는 중…"; position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); background: rgb(255 255 255 / .88); font-weight: 900; }
+.certificate-preview-frame img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: contain; }
+.certificate-cancelled-overlay { position: absolute; inset: 0; display: grid; place-items: center; color: white; background: rgb(117 44 27 / .62); font-size: clamp(1.2rem, 4vw, 2.6rem); font-weight: 900; transform: rotate(-8deg); text-shadow: 0 2px 8px #38150c; }
+.certificate-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin: 24px 0 0; background: var(--line); border: 1px solid var(--line); }
+.certificate-details div { min-width: 0; padding: 13px 15px; background: var(--card); }
+.certificate-details dt { color: var(--muted); font-size: .75rem; font-weight: 900; }
+.certificate-details dd { margin: 6px 0 0; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .85rem; }
+.admin-certificate-preview { margin-bottom: 28px; }
+
+@media (max-width: 760px) {
+  .certificate-section { padding: 18px; }
+  .certificate-heading { align-items: flex-start; flex-direction: column; }
+  .certificate-details { grid-template-columns: 1fr; }
+  .certificate-preview-frame { margin-block: 16px; }
+}

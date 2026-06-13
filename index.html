@@ -113,6 +113,30 @@
       <div class="score-display"><strong id="result-score"></strong><span id="result-max-score"></span><b id="pass-badge"></b></div>
       <ol id="result-items" class="result-items"></ol>
 
+      <section id="certificate-section" class="certificate-section" aria-labelledby="certificate-title">
+        <div class="certificate-heading">
+          <div><p class="eyebrow">CERTIFICATE</p><h2 id="certificate-title">발행 인증서</h2></div>
+          <span id="certificate-status-badge" class="certificate-badge"></span>
+        </div>
+        <p id="certificate-status-message" class="certificate-status-message" role="status" aria-live="polite"></p>
+        <div id="certificate-preview-frame" class="certificate-preview-frame" hidden>
+          <img id="certificate-preview" width="1600" height="900" alt="">
+          <div id="certificate-cancelled-overlay" class="certificate-cancelled-overlay" hidden>취소된 인증서 · 유효하지 않음</div>
+        </div>
+        <dl id="certificate-details" class="certificate-details" hidden>
+          <div><dt>인증 ID</dt><dd id="certificate-id">-</dd></div>
+          <div><dt>인증 상태</dt><dd id="certificate-status">-</dd></div>
+          <div><dt>저장 경로</dt><dd id="certificate-path">-</dd></div>
+          <div><dt>SHA-256 이미지 해시</dt><dd id="certificate-hash">-</dd></div>
+          <div><dt>발행일</dt><dd id="certificate-issued-date">-</dd></div>
+          <div><dt>유효기간</dt><dd id="certificate-validity">-</dd></div>
+        </dl>
+        <div id="certificate-actions" class="result-actions" hidden>
+          <button id="certificate-open-button" class="primary">원본 PNG 열기</button>
+          <button id="certificate-download-button" class="secondary">PNG 저장</button>
+        </div>
+      </section>
+
       <section class="report-section" aria-labelledby="report-title">
         <div class="report-heading"><div><p class="eyebrow">SUMMARY</p><h2 id="report-title">누적 응시 리포트</h2><p id="report-version" class="report-version"></p></div><strong id="report-count"></strong></div>
         <label class="report-mode-label">통계 집계 기준<select id="report-mode"><option value="latestPerEmployee">응시자별 최신 결과</option><option value="bestPerEmployee">응시자별 최고 결과</option><option value="allAttempts">전체 응시</option></select></label>
@@ -122,7 +146,6 @@
         <div class="table-wrap"><table><thead><tr><th>응시일시</th><th>성명</th><th>사번</th><th>부서</th><th>점수</th><th>합격 여부</th></tr></thead><tbody id="report-body"></tbody></table></div>
       </section>
       <div class="result-actions">
-        <button id="certificate-download-button" class="primary">발행 인증서 열기</button>
         <button id="download-button" class="secondary">현재 세션 CSV 내보내기</button>
         <button id="print-button" class="secondary">인쇄</button>
         <button id="new-attempt-button" class="text-button">같은 시험 새 응시</button>
@@ -165,6 +188,18 @@
         <button class="primary">조회</button>
         <button id="admin-export-button" class="secondary" type="button">조회 조건 CSV 내보내기</button>
       </form>
+      <section id="admin-certificate-preview-panel" class="certificate-section admin-certificate-preview" hidden aria-labelledby="admin-certificate-preview-title">
+        <div class="certificate-heading"><div><p class="eyebrow">REISSUED CERTIFICATE</p><h2 id="admin-certificate-preview-title" tabindex="-1">재발행 결과</h2></div><span id="admin-certificate-status-badge" class="certificate-badge"></span></div>
+        <p id="admin-certificate-message" class="certificate-status-message" role="status" aria-live="polite"></p>
+        <div class="certificate-preview-frame"><img id="admin-certificate-preview" width="1600" height="900" alt=""><div id="admin-certificate-cancelled-overlay" class="certificate-cancelled-overlay" hidden>취소된 인증서 · 유효하지 않음</div></div>
+        <dl class="certificate-details">
+          <div><dt>기존 인증 ID</dt><dd id="admin-certificate-id">-</dd></div>
+          <div><dt>인증 상태</dt><dd id="admin-certificate-status">-</dd></div>
+          <div><dt>새 이미지 SHA-256</dt><dd id="admin-certificate-hash">-</dd></div>
+          <div><dt>저장 경로</dt><dd id="admin-certificate-path">-</dd></div>
+          <div><dt>재발행 완료 시각</dt><dd id="admin-certificate-reissued-at">-</dd></div>
+        </dl>
+      </section>
       <div class="table-wrap"><table><thead><tr><th>응시일시</th><th>성명</th><th>사번</th><th>인증 ID</th><th>점수</th><th>등급</th><th>판정</th><th>인증 상태</th><th>관리</th></tr></thead><tbody id="admin-results-body"></tbody></table></div>
       <button class="text-button home-button">처음으로</button>
     </section>
