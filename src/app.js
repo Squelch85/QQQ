@@ -5,7 +5,7 @@ import { getMaxScore, MAX_FILE_BYTES, parseExamJson, toPublicExam } from "./exam
 import { buildExamReport, createReportCsv, makeAttemptRecord, parseReportCsv } from "./report.js";
 import { createCertificatePng } from "./certificate.js";
 import { certificateImageUrl, certificateViewModel } from "./certificate-ui.js";
-import { cancelCertificate, exportResultsCsvUrl, saveExamResult, searchResults, uploadCertificate, verifyCertificate, markCertificateIssueFailed } from "./result-api.js";
+import { cancelCertificate, exportResultsCsvUrl, makeLocalCertificateResult, saveExamResult, searchResults, uploadCertificate, verifyCertificate, markCertificateIssueFailed } from "./result-api.js";
 
 const viewIds = ["load-view", "converter-view", "ready-view", "exam-view", "result-view", "report-view", "verify-view", "admin-view"];
 const views = viewIds.map((id) => document.getElementById(id));
@@ -352,9 +352,29 @@ async function finalizeSubmission() {
       status.textContent += " · 인증서 발행 기준 미충족";
     }
   } catch (error) {
-    lastCertificateResult = { cert_status: "DB_SAVE_FAILED", issue_error: error instanceof Error ? error.message : "" };
-    renderCertificateState(lastCertificateResult);
-    status.textContent = error instanceof Error ? `DB 저장 실패: ${error.message}` : "DB 저장에 실패했습니다.";
+    const reason = error instanceof Error ? error.message : "DB 저장에 실패했습니다.";
+    const local = makeLocalCertificateResult(candidate, result, exam);
+    if (local.cert_id) {
+      try {
+        const png = await createCertificatePng(local, null);
+        showCertificatePreview(local, png);
+        lastCertificateResult = local;
+        renderCertificateState(local);
+        status.textContent = `DB 저장 실패: ${reason} · 로컬 인증서 발행 완료 (중앙 조회 불가)`;
+      } catch (certificateError) {
+        clearCertificatePreview();
+        lastCertificateResult = {
+          cert_status: "DB_SAVE_FAILED",
+          issue_error: certificateError instanceof Error ? certificateError.message : "로컬 인증서 생성 실패"
+        };
+        renderCertificateState(lastCertificateResult);
+        status.textContent = `DB 저장 실패: ${reason} · 로컬 인증서 생성 실패`;
+      }
+    } else {
+      lastCertificateResult = local;
+      renderCertificateState(local);
+      status.textContent = `DB 저장 실패: ${reason} · 인증서 발행 기준 미충족`;
+    }
   }
   renderResult(result, runtimeRecords);
 }

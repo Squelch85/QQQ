@@ -2011,7 +2011,9 @@ async function createCertificatePng(result, verificationUrl) {
     "상기 인원은 검사원 자격인증을 위한 Gauge R&R 필기평가에서 요구 기준을 충족하였으므로,",
     "측정시스템분석 및 검사 신뢰성 관리에 대한 기본 이해도를 보유하였음을 인증합니다.",
     "본 인증은 필기평가 결과에 대한 인증이며, 최종 자격은 공정 교육·실기평가·관리자 승인 충족 시 부여됩니다.",
-    "본 인증서는 검사 인증툴의 원본 평가기록과 인증 ID 조회 결과가 일치할 때 유효합니다."
+    result.cert_status === "LOCAL_ONLY"
+      ? "DB 장애로 로컬 발행된 인증서이며 중앙 조회·취소·감사 이력을 제공하지 않습니다."
+      : "본 인증서는 검사 인증툴의 원본 평가기록과 인증 ID 조회 결과가 일치할 때 유효합니다."
   ];
   lines.forEach((line, index) => context.fillText(line, 120, 570 + index * 35));
   drawField(context, "평가 담당자", result.evaluator, 120, 750);
@@ -2022,7 +2024,12 @@ async function createCertificatePng(result, verificationUrl) {
   context.fillStyle = "#64748b";
   context.font = "20px sans-serif";
   context.fillText(`발행일자 ${result.issued_date}`, 830, 815);
-  drawQr(context, verificationUrl, 1330, 650, 170);
+  if (verificationUrl) drawQr(context, verificationUrl, 1330, 650, 170);
+  else {
+    context.fillStyle = "#64748b";
+    context.font = "bold 22px sans-serif";
+    context.fillText("LOCAL ONLY", 1360, 740);
+  }
 
   return new Promise((resolve, reject) => canvas.toBlob(
     (blob) => blob ? resolve(blob) : reject(new Error("PNG 이미지를 만들지 못했습니다.")),
@@ -2037,6 +2044,7 @@ const CERTIFICATE_STATUS_LABELS = {
   ISSUE_FAILED: "발행 실패",
   CANCELLED: "취소",
   EXPIRED: "만료",
+  LOCAL_ONLY: "로컬 발행",
   NOT_ELIGIBLE: "발행 기준 미충족",
   DB_SAVE_FAILED: "DB 저장 실패"
 };
@@ -2044,16 +2052,17 @@ const CERTIFICATE_STATUS_LABELS = {
 function certificateViewModel(result = {}) {
   const status = result.cert_status || (result.cert_id ? "ISSUE_PENDING" : "NOT_ELIGIBLE");
   const hasImage = Boolean(result.certificate_path || result.previewUrl);
-  const visible = status === "VALID" || status === "CANCELLED" || status === "EXPIRED";
-  const actionable = status === "VALID" && hasImage;
+  const visible = status === "VALID" || status === "CANCELLED" || status === "EXPIRED" || status === "LOCAL_ONLY";
+  const actionable = (status === "VALID" || status === "LOCAL_ONLY") && hasImage;
   const messages = {
     VALID: "인증서가 정상 발행되어 SQLite 결과와 함께 저장되었습니다.",
     ISSUE_PENDING: "인증서 발행 중입니다.",
     ISSUE_FAILED: `시험 결과는 DB에 저장되었지만 인증서 이미지 생성에 실패했습니다.${result.issue_error ? ` 사유: ${result.issue_error}` : ""}`,
     CANCELLED: "취소된 인증서입니다. 이미지가 표시되더라도 인증 효력이 없습니다.",
     EXPIRED: "유효기간이 만료된 인증서입니다.",
+    LOCAL_ONLY: "DB 저장 없이 로컬 인증서를 발행했습니다. PNG를 보관할 수 있지만 중앙 조회·취소·감사 이력은 제공되지 않습니다.",
     NOT_ELIGIBLE: "C/D 등급 또는 불합격 결과로 인증서 발행 기준을 충족하지 못했습니다.",
-    DB_SAVE_FAILED: "시험 결과 DB 저장에 실패하여 인증서 발행을 시도하지 않았습니다."
+    DB_SAVE_FAILED: "시험 결과 DB 저장에 실패했고 로컬 인증서 발행도 완료되지 않았습니다."
   };
   return {
     status,
@@ -2105,6 +2114,24 @@ function makeResultPayload(candidate, result, exam) {
     valid_to: validTo.toISOString().slice(0, 10),
     evaluator: candidate.evaluator || "",
     approver: candidate.approver || ""
+  };
+}
+
+function makeLocalCertificateResult(candidate, result, exam) {
+  const payload = makeResultPayload(candidate, result, exam);
+  const grade = result.score >= 90 ? "A" : result.score >= 80 ? "B" : result.score >= 70 ? "C" : "D";
+  const passed = result.score >= payload.pass_score;
+  if (!passed || result.score < 80) return { ...payload, grade, pass_status: passed ? "PASS" : "FAIL", cert_status: "NOT_ELIGIBLE" };
+
+  const randomId = globalThis.crypto?.randomUUID?.().replaceAll("-", "").slice(0, 12).toUpperCase()
+    ?? `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`.toUpperCase();
+  return {
+    ...payload,
+    grade,
+    pass_status: "PASS",
+    cert_id: `LOCAL-${payload.issued_date.replaceAll("-", "")}-${randomId}`,
+    cert_status: "LOCAL_ONLY",
+    qr_value: null
   };
 }
 
@@ -2505,9 +2532,29 @@ async function finalizeSubmission() {
       status.textContent += " · 인증서 발행 기준 미충족";
     }
   } catch (error) {
-    lastCertificateResult = { cert_status: "DB_SAVE_FAILED", issue_error: error instanceof Error ? error.message : "" };
-    renderCertificateState(lastCertificateResult);
-    status.textContent = error instanceof Error ? `DB 저장 실패: ${error.message}` : "DB 저장에 실패했습니다.";
+    const reason = error instanceof Error ? error.message : "DB 저장에 실패했습니다.";
+    const local = makeLocalCertificateResult(candidate, result, exam);
+    if (local.cert_id) {
+      try {
+        const png = await createCertificatePng(local, null);
+        showCertificatePreview(local, png);
+        lastCertificateResult = local;
+        renderCertificateState(local);
+        status.textContent = `DB 저장 실패: ${reason} · 로컬 인증서 발행 완료 (중앙 조회 불가)`;
+      } catch (certificateError) {
+        clearCertificatePreview();
+        lastCertificateResult = {
+          cert_status: "DB_SAVE_FAILED",
+          issue_error: certificateError instanceof Error ? certificateError.message : "로컬 인증서 생성 실패"
+        };
+        renderCertificateState(lastCertificateResult);
+        status.textContent = `DB 저장 실패: ${reason} · 로컬 인증서 생성 실패`;
+      }
+    } else {
+      lastCertificateResult = local;
+      renderCertificateState(local);
+      status.textContent = `DB 저장 실패: ${reason} · 인증서 발행 기준 미충족`;
+    }
   }
   renderResult(result, runtimeRecords);
 }
