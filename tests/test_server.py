@@ -72,6 +72,17 @@ class ServerStorageTest(unittest.TestCase):
             ).fetchone()
         self.assertEqual(dict(history), {"next_status": "CANCELLED", "reason": "관리자 취소"})
 
+    def test_reissuing_cancelled_certificate_keeps_id_and_cancelled_status(self):
+        result = self.server.insert_result(self.payload())
+        cert_id = result["cert_id"]
+        self.server.set_certificate_status(cert_id, "CANCELLED", "관리자 취소")
+
+        reissued = self.server.save_certificate(cert_id, b"\x89PNG\r\n\x1a\nreissued")
+
+        self.assertEqual(reissued["cert_id"], cert_id)
+        self.assertEqual(reissued["cert_status"], "CANCELLED")
+        self.assertTrue(reissued["certificate_path"].endswith(f"CERT_{cert_id}.png"))
+
 
 if __name__ == "__main__":
     unittest.main()

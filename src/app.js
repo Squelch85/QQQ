@@ -4,6 +4,7 @@ import { defaultExam } from "./default-exam.js";
 import { getMaxScore, MAX_FILE_BYTES, parseExamJson, toPublicExam } from "./exam.js";
 import { buildExamReport, createReportCsv, makeAttemptRecord, parseReportCsv } from "./report.js";
 import { createCertificatePng } from "./certificate.js";
+import { certificateImageUrl, certificateViewModel } from "./certificate-ui.js";
 import { cancelCertificate, exportResultsCsvUrl, saveExamResult, searchResults, uploadCertificate, verifyCertificate, markCertificateIssueFailed } from "./result-api.js";
 
 const viewIds = ["load-view", "converter-view", "ready-view", "exam-view", "result-view", "report-view", "verify-view", "admin-view"];
@@ -23,6 +24,59 @@ let deadline = null;
 let reportMode = "latestPerEmployee";
 let runtimeRecords = [];
 let lastCertificateResult = null;
+let certificatePreviewUrl = null;
+let certificateBlob = null;
+let adminCertificatePreviewUrl = null;
+
+function revokePreviewUrl(name) {
+  const url = name === "admin" ? adminCertificatePreviewUrl : certificatePreviewUrl;
+  if (url) URL.revokeObjectURL(url);
+  if (name === "admin") adminCertificatePreviewUrl = null;
+  else certificatePreviewUrl = null;
+}
+
+function clearCertificatePreview() {
+  revokePreviewUrl("result");
+  certificateBlob = null;
+  const image = document.getElementById("certificate-preview");
+  image.removeAttribute("src");
+  image.alt = "";
+}
+
+function showCertificatePreview(result, blob) {
+  clearCertificatePreview();
+  certificateBlob = blob;
+  certificatePreviewUrl = URL.createObjectURL(blob);
+  result.previewUrl = certificatePreviewUrl;
+  const image = document.getElementById("certificate-preview");
+  image.src = certificatePreviewUrl;
+  image.alt = `인증 ID ${result.cert_id} 인증서 미리보기`;
+}
+
+function renderCertificateState(result = {}) {
+  const model = certificateViewModel(result);
+  const badge = document.getElementById("certificate-status-badge");
+  badge.textContent = model.label;
+  badge.className = `certificate-badge ${model.status.toLowerCase().replaceAll("_", "-")}`;
+  document.getElementById("certificate-status-message").textContent = model.message;
+  const frame = document.getElementById("certificate-preview-frame");
+  frame.hidden = !model.showPreview;
+  frame.classList.toggle("loading", model.loading);
+  document.getElementById("certificate-cancelled-overlay").hidden = !model.cancelled;
+  document.getElementById("certificate-details").hidden = !model.showDetails;
+  document.getElementById("certificate-actions").hidden = !model.showActions;
+  document.getElementById("certificate-id").textContent = result.cert_id || "-";
+  document.getElementById("certificate-status").textContent = model.label;
+  document.getElementById("certificate-path").textContent = result.certificate_path || "-";
+  document.getElementById("certificate-hash").textContent = result.certificate_hash || "-";
+  document.getElementById("certificate-issued-date").textContent = result.issued_date || "-";
+  document.getElementById("certificate-validity").textContent = result.valid_from && result.valid_to ? `${result.valid_from} ~ ${result.valid_to}` : "-";
+  if (model.showPreview && !certificatePreviewUrl && result.certificate_path) {
+    const image = document.getElementById("certificate-preview");
+    image.src = certificateImageUrl(result.certificate_path);
+    image.alt = `인증 ID ${result.cert_id} 인증서 미리보기`;
+  }
+}
 
 function showView(id) {
   for (const view of views) view.hidden = view.id !== id;
@@ -47,6 +101,7 @@ function stopTimer() {
 
 function prepareExam(nextExam) {
   stopTimer();
+  clearCertificatePreview();
   exam = structuredClone(nextExam);
   publicExam = toPublicExam(exam);
   attempt = new Attempt(exam);
@@ -265,25 +320,40 @@ async function finalizeSubmission() {
   const result = attempt.grade();
   storeResult(result);
   const status = document.getElementById("report-storage-status");
+  clearCertificatePreview();
+  renderCertificateState({ cert_status: "ISSUE_PENDING" });
   try {
     let saved = await saveExamResult(candidate, result, exam);
     status.textContent = `SQLite DB 저장 완료 · 결과 번호 ${saved.result_id}`;
     lastCertificateResult = null;
     if (saved.cert_id) {
+      lastCertificateResult = saved;
+      renderCertificateState(saved);
       try {
         const verificationUrl = new URL(`/api/certificates/${encodeURIComponent(saved.cert_id)}`, window.location.origin).href;
         const png = await createCertificatePng(saved, verificationUrl);
+        showCertificatePreview(saved, png);
         saved = await uploadCertificate(saved.cert_id, png);
+        saved.previewUrl = certificatePreviewUrl;
         lastCertificateResult = saved;
+        renderCertificateState(saved);
         status.textContent += ` · 인증서 자동 발행 완료 (${saved.cert_id})`;
       } catch (error) {
-        await markCertificateIssueFailed(saved.cert_id, error instanceof Error ? error.message : "인증서 생성 실패");
+        const reason = error instanceof Error ? error.message : "인증서 생성 실패";
+        await markCertificateIssueFailed(saved.cert_id, reason);
+        clearCertificatePreview();
+        lastCertificateResult = { ...saved, cert_status: "ISSUE_FAILED", issue_error: reason };
+        renderCertificateState(lastCertificateResult);
         status.textContent += ` · 인증서 생성 실패 (DB 결과는 보존됨, ${saved.cert_id})`;
       }
     } else {
+      lastCertificateResult = { ...saved, cert_status: "NOT_ELIGIBLE" };
+      renderCertificateState(lastCertificateResult);
       status.textContent += " · 인증서 발행 기준 미충족";
     }
   } catch (error) {
+    lastCertificateResult = { cert_status: "DB_SAVE_FAILED", issue_error: error instanceof Error ? error.message : "" };
+    renderCertificateState(lastCertificateResult);
     status.textContent = error instanceof Error ? `DB 저장 실패: ${error.message}` : "DB 저장에 실패했습니다.";
   }
   renderResult(result, runtimeRecords);
@@ -336,6 +406,7 @@ function resumeExam() {
 
 function startNewAttempt() {
   stopTimer();
+  clearCertificatePreview();
   attempt = new Attempt(exam);
   candidate = null;
   currentQuestionIndex = 0;
@@ -404,8 +475,17 @@ document.getElementById("download-button").addEventListener("click", () => downl
 document.getElementById("report-mode").addEventListener("change", (event) => { reportMode = event.currentTarget.value; renderReport(getStoredRecords()); });
 document.getElementById("print-button").addEventListener("click", () => window.print());
 document.getElementById("new-attempt-button").addEventListener("click", startNewAttempt);
+document.getElementById("certificate-open-button").addEventListener("click", () => {
+  const url = certificatePreviewUrl || certificateImageUrl(lastCertificateResult?.certificate_path);
+  if (url) window.open(url, "_blank", "noopener");
+});
 document.getElementById("certificate-download-button").addEventListener("click", () => {
-  if (lastCertificateResult?.certificate_path) window.open(`/${lastCertificateResult.certificate_path}`, "_blank", "noopener");
+  const url = certificatePreviewUrl || certificateImageUrl(lastCertificateResult?.certificate_path);
+  if (!url) return;
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `CERT_${lastCertificateResult.cert_id}.png`;
+  link.click();
 });
 document.getElementById("show-verify-button").addEventListener("click", () => showView("verify-view"));
 document.getElementById("show-admin-button").addEventListener("click", () => { showView("admin-view"); void loadAdminResults(); });
@@ -444,10 +524,39 @@ async function loadAdminResults() {
         const reissue = document.createElement("button");
         reissue.type = "button"; reissue.textContent = "재발행";
         reissue.addEventListener("click", async () => {
-          const url = new URL(`/api/certificates/${encodeURIComponent(record.cert_id)}`, window.location.origin).href;
-          const png = await createCertificatePng(record, url);
-          await uploadCertificate(record.cert_id, png);
-          await loadAdminResults();
+          const panel = document.getElementById("admin-certificate-preview-panel");
+          const message = document.getElementById("admin-certificate-message");
+          message.textContent = "인증서 재발행 중입니다.";
+          try {
+            const originalCertId = record.cert_id;
+            const url = new URL(`/api/certificates/${encodeURIComponent(originalCertId)}`, window.location.origin).href;
+            const png = await createCertificatePng(record, url);
+            const saved = await uploadCertificate(originalCertId, png);
+            if (saved.cert_id !== originalCertId) throw new Error("재발행 중 인증 ID가 변경되었습니다.");
+            revokePreviewUrl("admin");
+            adminCertificatePreviewUrl = URL.createObjectURL(png);
+            const image = document.getElementById("admin-certificate-preview");
+            image.src = adminCertificatePreviewUrl;
+            image.alt = `인증 ID ${saved.cert_id} 재발행 인증서 미리보기`;
+            document.getElementById("admin-certificate-id").textContent = saved.cert_id;
+            document.getElementById("admin-certificate-status").textContent = certificateViewModel(saved).label;
+            document.getElementById("admin-certificate-hash").textContent = saved.certificate_hash || "-";
+            document.getElementById("admin-certificate-path").textContent = saved.certificate_path || "-";
+            document.getElementById("admin-certificate-reissued-at").textContent = new Date().toLocaleString("ko-KR");
+            const badge = document.getElementById("admin-certificate-status-badge");
+            badge.textContent = certificateViewModel(saved).label;
+            badge.className = `certificate-badge ${saved.cert_status.toLowerCase().replaceAll("_", "-")}`;
+            document.getElementById("admin-certificate-cancelled-overlay").hidden = saved.cert_status !== "CANCELLED";
+            message.textContent = saved.cert_status === "CANCELLED"
+              ? "이미지를 재발행했지만 취소 상태는 유지됩니다."
+              : "인증서 이미지 재발행이 완료되었습니다.";
+            panel.hidden = false;
+            document.getElementById("admin-certificate-preview-title").focus({ preventScroll: true });
+            await loadAdminResults();
+          } catch (error) {
+            message.textContent = error instanceof Error ? `재발행 실패: ${error.message}` : "인증서 재발행에 실패했습니다.";
+            panel.hidden = false;
+          }
         });
         const cancel = document.createElement("button");
         cancel.type = "button"; cancel.textContent = "취소";

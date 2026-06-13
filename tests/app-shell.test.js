@@ -60,6 +60,33 @@ test("인증 검증과 관리자 검색·재발행·취소·CSV 내보내기를 
   assert.match(apiSource, /\/api\/results\.csv/);
 });
 
+test("결과 화면은 인증서 미리보기, 메타데이터, 분리된 열기·저장 동작을 제공한다", async () => {
+  const [html, appSource] = await Promise.all([readProjectFile("index.html"), readProjectFile("src/app.js")]);
+
+  assert.match(html, /id="certificate-preview"/);
+  assert.match(html, /id="certificate-id"/);
+  assert.match(html, /id="certificate-path"/);
+  assert.match(html, /id="certificate-hash"/);
+  assert.match(html, /id="certificate-open-button"[^>]*>원본 PNG 열기/);
+  assert.match(html, /id="certificate-download-button"[^>]*>PNG 저장/);
+  assert.match(appSource, /certificatePreviewUrl = URL\.createObjectURL\(blob\)/);
+  assert.match(appSource, /image\.src = certificatePreviewUrl/);
+  assert.match(appSource, /URL\.revokeObjectURL\(url\)/);
+  assert.match(appSource, /const png = await createCertificatePng\(saved, verificationUrl\);[\s\S]+showCertificatePreview\(saved, png\);[\s\S]+uploadCertificate\(saved\.cert_id, png\)/);
+});
+
+test("관리자 재발행은 기존 인증 ID를 검증하고 새 PNG 미리보기를 갱신한다", async () => {
+  const [html, appSource] = await Promise.all([readProjectFile("index.html"), readProjectFile("src/app.js")]);
+
+  assert.match(html, /id="admin-certificate-preview"/);
+  assert.match(html, /id="admin-certificate-reissued-at"/);
+  assert.match(appSource, /const originalCertId = record\.cert_id/);
+  assert.match(appSource, /uploadCertificate\(originalCertId, png\)/);
+  assert.match(appSource, /saved\.cert_id !== originalCertId/);
+  assert.match(appSource, /adminCertificatePreviewUrl = URL\.createObjectURL\(png\)/);
+  assert.match(appSource, /saved\.cert_status === "CANCELLED"/);
+});
+
 test("현재 시험과 답안 상태는 홈 이동 후에도 유지하고 명시적 시험 로드 때만 교체한다", async () => {
   const [html, appSource] = await Promise.all([readProjectFile("index.html"), readProjectFile("src/app.js")]);
 

@@ -8,6 +8,7 @@ const sourceFiles = [
   "src/default-exam.js",
   "src/report.js",
   "src/certificate.js",
+  "src/certificate-ui.js",
   "src/result-api.js",
   "src/app.js"
 ];
