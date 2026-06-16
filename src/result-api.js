@@ -7,7 +7,7 @@ async function request(path, options) {
   return payload;
 }
 
-export function makeResultPayload(candidate, result, exam) {
+export function makeResultPayload(candidate, result, exam, submission = null) {
   const correctCount = result.items.filter((item) => item.status === "correct").length;
   const examDate = result.submittedAt;
   const issuedDate = examDate.slice(0, 10);
@@ -17,15 +17,21 @@ export function makeResultPayload(candidate, result, exam) {
     exam_type: exam.examType || "GRR-WT",
     exam_name: exam.certificateExamName || exam.title,
     exam_version: String(exam.revision ?? 1),
+    exam_id: exam.id,
+    exam_revision: exam.revision ?? 1,
     employee_id: candidate.employeeId,
     employee_name: candidate.name,
     department: candidate.department || "",
     process_name: candidate.processName || "",
     exam_date: examDate,
+    submitted_at: submission?.submittedAt ?? examDate,
+    answers: submission?.answers ?? {},
+    items: result.items,
     total_questions: result.items.length,
     correct_count: correctCount,
     wrong_count: result.items.length - correctCount,
     score: result.score,
+    max_score: result.maxScore,
     pass_score: exam.passingScore ?? result.maxScore * 0.8,
     issued_date: issuedDate,
     valid_from: issuedDate,
@@ -53,12 +59,49 @@ export function makeLocalCertificateResult(candidate, result, exam) {
   };
 }
 
-export async function saveExamResult(candidate, result, exam) {
+export async function saveExamResult(candidate, result, exam, submission = null) {
   return (await request("/api/results", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(makeResultPayload(candidate, result, exam))
+    body: JSON.stringify(makeResultPayload(candidate, result, exam, submission))
   })).result;
+}
+
+export async function createAssessmentSession(payload) {
+  return (await request("/api/assessment-sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  })).session;
+}
+
+export async function saveSubmission(payload) {
+  return request("/api/submissions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function validateCertificationReadiness(sessionId, qualificationTypeId = null, examineeId = null) {
+  const body = {
+    assessment_session_id: sessionId,
+    qualification_type_id: qualificationTypeId,
+    examinee_id: examineeId
+  };
+  return (await request("/api/certification/readiness", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(Object.fromEntries(Object.entries(body).filter(([, value]) => value !== null && value !== undefined && value !== "")))
+  })).readiness;
+}
+
+export async function createCertificationDecision(payload) {
+  return request("/api/certification-decisions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
 }
 
 export async function uploadCertificate(certId, blob) {

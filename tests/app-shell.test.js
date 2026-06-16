@@ -37,7 +37,7 @@ test("시험 결과는 CSV 자동 저장 없이 SQLite API에 저장한다", asy
   const [html, appSource] = await Promise.all([readProjectFile("index.html"), readProjectFile("src/app.js")]);
 
   assert.match(appSource, /prepareExam\(defaultExam\)/);
-  assert.match(appSource, /await saveExamResult\(candidate, result, exam\)/);
+  assert.match(appSource, /await saveExamResult\(candidate, result, exam, submission\)/);
   assert.match(appSource, /await uploadCertificate\(saved\.cert_id, png\)/);
   assert.doesNotMatch(appSource, /writeCandidateReport/);
   assert.doesNotMatch(html, /자동 저장 디렉터리 선택/);

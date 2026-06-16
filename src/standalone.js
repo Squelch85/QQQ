@@ -92,6 +92,13 @@ function validateScoring(question, choiceIds, path, errors) {
   }
 }
 
+function validateExamRevision(candidate) {
+  const errors = [];
+  if (!isObject(candidate)) return { valid: false, errors: ["root: 시험지는 JSON 객체여야 합니다."] };
+  if (!Number.isInteger(candidate.revision) || candidate.revision < 1) errors.push("revision: 1 이상의 정수여야 합니다.");
+  return { valid: errors.length === 0, errors };
+}
+
 function validateExam(candidate) {
   const errors = [];
   if (!isObject(candidate)) return { valid: false, errors: ["root: 시험지는 JSON 객체여야 합니다."] };
@@ -100,7 +107,7 @@ function validateExam(candidate) {
     errors.push(`schemaVersion: 지원 버전은 ${EXAM_SCHEMA_VERSION}입니다.`);
   }
   validateText(candidate.id, "id", errors);
-  if (!Number.isInteger(candidate.revision) || candidate.revision < 1) errors.push("revision: 1 이상의 정수여야 합니다.");
+  errors.push(...validateExamRevision(candidate).errors);
   validateText(candidate.title, "title", errors);
   validateText(candidate.instructions, "instructions", errors, { required: false });
 
@@ -2089,7 +2096,7 @@ async function request(path, options) {
   return payload;
 }
 
-function makeResultPayload(candidate, result, exam) {
+function makeResultPayload(candidate, result, exam, submission = null) {
   const correctCount = result.items.filter((item) => item.status === "correct").length;
   const examDate = result.submittedAt;
   const issuedDate = examDate.slice(0, 10);
@@ -2099,15 +2106,21 @@ function makeResultPayload(candidate, result, exam) {
     exam_type: exam.examType || "GRR-WT",
     exam_name: exam.certificateExamName || exam.title,
     exam_version: String(exam.revision ?? 1),
+    exam_id: exam.id,
+    exam_revision: exam.revision ?? 1,
     employee_id: candidate.employeeId,
     employee_name: candidate.name,
     department: candidate.department || "",
     process_name: candidate.processName || "",
     exam_date: examDate,
+    submitted_at: submission?.submittedAt ?? examDate,
+    answers: submission?.answers ?? {},
+    items: result.items,
     total_questions: result.items.length,
     correct_count: correctCount,
     wrong_count: result.items.length - correctCount,
     score: result.score,
+    max_score: result.maxScore,
     pass_score: exam.passingScore ?? result.maxScore * 0.8,
     issued_date: issuedDate,
     valid_from: issuedDate,
@@ -2135,12 +2148,49 @@ function makeLocalCertificateResult(candidate, result, exam) {
   };
 }
 
-async function saveExamResult(candidate, result, exam) {
+async function saveExamResult(candidate, result, exam, submission = null) {
   return (await request("/api/results", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(makeResultPayload(candidate, result, exam))
+    body: JSON.stringify(makeResultPayload(candidate, result, exam, submission))
   })).result;
+}
+
+async function createAssessmentSession(payload) {
+  return (await request("/api/assessment-sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  })).session;
+}
+
+async function saveSubmission(payload) {
+  return request("/api/submissions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+}
+
+async function validateCertificationReadiness(sessionId, qualificationTypeId = null, examineeId = null) {
+  const body = {
+    assessment_session_id: sessionId,
+    qualification_type_id: qualificationTypeId,
+    examinee_id: examineeId
+  };
+  return (await request("/api/certification/readiness", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(Object.fromEntries(Object.entries(body).filter(([, value]) => value !== null && value !== undefined && value !== "")))
+  })).readiness;
+}
+
+async function createCertificationDecision(payload) {
+  return request("/api/certification-decisions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
 }
 
 async function uploadCertificate(certId, blob) {
@@ -2496,14 +2546,14 @@ function renderResult(result, records) {
 
 async function finalizeSubmission() {
   stopTimer();
-  attempt.submit();
+  const submission = attempt.submit();
   const result = attempt.grade();
   storeResult(result);
   const status = document.getElementById("report-storage-status");
   clearCertificatePreview();
   renderCertificateState({ cert_status: "ISSUE_PENDING" });
   try {
-    let saved = await saveExamResult(candidate, result, exam);
+    let saved = await saveExamResult(candidate, result, exam, submission);
     status.textContent = `SQLite DB 저장 완료 · 결과 번호 ${saved.result_id}`;
     lastCertificateResult = null;
     if (saved.cert_id) {

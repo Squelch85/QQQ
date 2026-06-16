@@ -87,6 +87,13 @@ function validateScoring(question, choiceIds, path, errors) {
   }
 }
 
+export function validateExamRevision(candidate) {
+  const errors = [];
+  if (!isObject(candidate)) return { valid: false, errors: ["root: 시험지는 JSON 객체여야 합니다."] };
+  if (!Number.isInteger(candidate.revision) || candidate.revision < 1) errors.push("revision: 1 이상의 정수여야 합니다.");
+  return { valid: errors.length === 0, errors };
+}
+
 export function validateExam(candidate) {
   const errors = [];
   if (!isObject(candidate)) return { valid: false, errors: ["root: 시험지는 JSON 객체여야 합니다."] };
@@ -95,7 +102,7 @@ export function validateExam(candidate) {
     errors.push(`schemaVersion: 지원 버전은 ${EXAM_SCHEMA_VERSION}입니다.`);
   }
   validateText(candidate.id, "id", errors);
-  if (!Number.isInteger(candidate.revision) || candidate.revision < 1) errors.push("revision: 1 이상의 정수여야 합니다.");
+  errors.push(...validateExamRevision(candidate).errors);
   validateText(candidate.title, "title", errors);
   validateText(candidate.instructions, "instructions", errors, { required: false });
 
