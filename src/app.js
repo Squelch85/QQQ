@@ -316,14 +316,14 @@ function renderResult(result, records) {
 
 async function finalizeSubmission() {
   stopTimer();
-  attempt.submit();
+  const submission = attempt.submit();
   const result = attempt.grade();
   storeResult(result);
   const status = document.getElementById("report-storage-status");
   clearCertificatePreview();
   renderCertificateState({ cert_status: "ISSUE_PENDING" });
   try {
-    let saved = await saveExamResult(candidate, result, exam);
+    let saved = await saveExamResult(candidate, result, exam, submission);
     status.textContent = `SQLite DB 저장 완료 · 결과 번호 ${saved.result_id}`;
     lastCertificateResult = null;
     if (saved.cert_id) {

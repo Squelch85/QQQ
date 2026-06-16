@@ -10,6 +10,7 @@ class ServerStorageTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         os.environ["QQQ_DATA_DIR"] = self.temp.name
         import server
+
         server.DATA_DIR = Path(self.temp.name)
         server.DB_PATH = server.DATA_DIR / "exam_results.sqlite3"
         server.CERTIFICATE_DIR = server.DATA_DIR / "certificates"
@@ -19,31 +20,72 @@ class ServerStorageTest(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def payload(self, score=90):
-        return {
+    def payload(self, score=90, employee_id="E001", exam_date="2026-06-13T10:00:00Z", revision="1"):
+        payload = {
             "exam_type": "GRR-WT",
-            "exam_name": "검사원 자격인증 Gauge R&R 필기평가",
-            "exam_version": "1",
-            "employee_id": "E001",
-            "employee_name": "홍길동",
-            "department": "품질",
+            "exam_name": "Inspector written exam",
+            "employee_id": employee_id,
+            "employee_name": "Inspector One",
+            "department": "Quality",
             "process_name": "AOI",
-            "exam_date": "2026-06-13T10:00:00Z",
+            "exam_date": exam_date,
+            "submitted_at": exam_date,
+            "exam_id": "inspector-written",
             "total_questions": 40,
             "correct_count": 36,
             "wrong_count": 4,
             "score": score,
+            "max_score": 100,
             "pass_score": 80,
             "issued_date": "2026-06-13",
             "valid_from": "2026-06-13",
             "valid_to": "2027-06-13",
-            "evaluator": "평가자",
-            "approver": "승인자",
+            "evaluator": "Evaluator",
+            "approver": "Approver",
+            "answers": {"q1": "a"},
+            "items": [{"questionId": "q1", "status": "correct"}],
         }
+        if revision is not None:
+            payload["exam_version"] = revision
+        return payload
+
+    def test_migrations_are_idempotent_and_keep_legacy_results_readable(self):
+        self.server.initialize_database()
+        self.server.initialize_database()
+
+        with self.server.connect() as connection:
+            tables = {
+                row["name"]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            migrations = {
+                row["version"]
+                for row in connection.execute("SELECT version FROM schema_migrations").fetchall()
+            }
+            connection.execute(
+                """INSERT INTO exam_results (
+                    exam_type, exam_name, exam_version, employee_id, employee_name,
+                    exam_date, total_questions, correct_count, wrong_count, score,
+                    pass_score, grade, pass_status, created_at, updated_at
+                ) VALUES (
+                    'GRR-WT', 'Legacy', '1', 'LEGACY', 'Legacy User',
+                    '2026-06-01T00:00:00Z', 1, 1, 0, 100,
+                    80, 'A', 'PASS', '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z'
+                )"""
+            )
+
+        self.assertIn("schema_migrations", tables)
+        self.assertIn("assessment_sessions", tables)
+        self.assertIn("certificates", tables)
+        self.assertEqual(migrations, {1, 2})
+        rows = self.server.search_results({"search": ["LEGACY"]})
+        self.assertEqual(rows[0]["employee_id"], "LEGACY")
 
     def test_pass_result_gets_unique_certificate_id_and_png_hash(self):
         first = self.server.insert_result(self.payload())
-        second = self.server.insert_result({**self.payload(), "employee_id": "E002"})
+        second = self.server.insert_result(self.payload(employee_id="E002"))
         self.assertRegex(first["cert_id"], r"^GRR-WT-\d{2}-\d{6}-[0-9A-F]{4}$")
         self.assertNotEqual(first["cert_id"], second["cert_id"])
         self.assertEqual(first["cert_status"], "ISSUE_PENDING")
@@ -54,15 +96,95 @@ class ServerStorageTest(unittest.TestCase):
         self.assertEqual(saved["certificate_hash"], hashlib.sha256(png).hexdigest())
         self.assertTrue(saved["certificate_path"].endswith(f"CERT_{first['cert_id']}.png"))
 
+    def test_result_insert_creates_assessment_session_submission_grade_and_official_certificate(self):
+        result = self.server.insert_result(self.payload(revision=None))
+
+        self.assertEqual(result["exam_version"], "1")
+        self.assertIsNotNone(result["assessment_session_id"])
+        self.assertIsNotNone(result["submission_id"])
+        self.assertIsNotNone(result["grade_result_id"])
+        self.assertIsNotNone(result["certification_decision_id"])
+
+        with self.server.connect() as connection:
+            submission = connection.execute("SELECT * FROM submissions").fetchone()
+            grade = connection.execute("SELECT * FROM grade_results").fetchone()
+            cert = connection.execute("SELECT * FROM certificates").fetchone()
+        self.assertEqual(submission["exam_revision"], 1)
+        self.assertEqual(grade["result_id"], result["result_id"])
+        self.assertEqual(cert["issue_mode"], "official")
+        self.assertEqual(cert["cert_id"], result["cert_id"])
+
+    def test_invalid_revision_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.server.insert_result(self.payload(revision="1.5"))
+        with self.assertRaises(ValueError):
+            self.server.insert_result(self.payload(revision="0"))
+
     def test_c_and_d_grades_do_not_issue_certificate(self):
         grade_c = self.server.insert_result(self.payload(75))
-        grade_d = self.server.insert_result(self.payload(65))
+        grade_d = self.server.insert_result(self.payload(65, employee_id="E002"))
         self.assertEqual((grade_c["grade"], grade_c["cert_id"]), ("C", None))
         self.assertEqual((grade_d["grade"], grade_d["pass_status"]), ("D", "FAIL"))
 
+    def test_readiness_rejects_missing_or_failed_session_and_waits_for_approval(self):
+        missing = self.server.validate_certification_readiness(999)
+        self.assertEqual(missing["status"], "rejected")
+        self.assertIn("assessment_session_not_found", missing["blocking_reasons"])
+
+        failed = self.server.insert_result(self.payload(70))
+        failed_ready = self.server.validate_certification_readiness(failed["assessment_session_id"])
+        self.assertEqual(failed_ready["status"], "rejected")
+        self.assertIn("written_exam_not_passed", failed_ready["blocking_reasons"])
+
+        session = self.server.create_assessment_session(
+            {
+                "employee_id": "E003",
+                "employee_name": "Pending Approval",
+                "exam_type": "GRR-WT",
+                "exam_name": "Inspector written exam",
+            }
+        )
+        self.server.create_submission(
+            {
+                "assessment_session_id": session["assessment_session_id"],
+                "attempt_id": "attempt-pending",
+                "exam_id": "inspector-written",
+                "exam_revision": 1,
+                "submitted_at": "2026-06-14T10:00:00Z",
+                "score": 85,
+                "max_score": 100,
+                "pass_score": 80,
+                "items": [],
+                "answers": {},
+            }
+        )
+        pending = self.server.validate_certification_readiness(session["assessment_session_id"])
+        self.assertEqual(pending["status"], "pending")
+        self.assertIn("approval_required", pending["blocking_reasons"])
+
+        approved = self.server.create_certification_decision(
+            {
+                "assessment_session_id": session["assessment_session_id"],
+                "decision": "approved",
+                "approved_by": "QA Manager",
+            }
+        )
+        self.assertTrue(approved["readiness"]["ready"])
+        self.assertEqual(approved["readiness"]["status"], "approved")
+
+    def test_official_certificate_is_queryable_and_local_only_is_not(self):
+        result = self.server.insert_result(self.payload())
+        official = self.server.get_certificate(result["cert_id"])
+        self.assertEqual(official["cert_id"], result["cert_id"])
+
+        with self.assertRaises(LookupError):
+            self.server.get_certificate("LOCAL-20260613-ABCDEF123456")
+        with self.assertRaises(LookupError):
+            self.server.save_certificate("LOCAL-20260613-ABCDEF123456", b"\x89PNG\r\n\x1a\nlocal")
+
     def test_cancel_records_status_history_without_changing_result(self):
         result = self.server.insert_result(self.payload())
-        cancelled = self.server.set_certificate_status(result["cert_id"], "CANCELLED", "관리자 취소")
+        cancelled = self.server.set_certificate_status(result["cert_id"], "CANCELLED", "admin cancel")
         self.assertEqual(cancelled["cert_status"], "CANCELLED")
         self.assertEqual(cancelled["score"], 90)
         with self.server.connect() as connection:
@@ -70,18 +192,36 @@ class ServerStorageTest(unittest.TestCase):
                 "SELECT next_status, reason FROM certificate_status_history WHERE result_id = ?",
                 (result["result_id"],),
             ).fetchone()
-        self.assertEqual(dict(history), {"next_status": "CANCELLED", "reason": "관리자 취소"})
+            cert = connection.execute(
+                "SELECT status FROM certificates WHERE cert_id = ?", (result["cert_id"],)
+            ).fetchone()
+        self.assertEqual(dict(history), {"next_status": "CANCELLED", "reason": "admin cancel"})
+        self.assertEqual(cert["status"], "CANCELLED")
 
     def test_reissuing_cancelled_certificate_keeps_id_and_cancelled_status(self):
         result = self.server.insert_result(self.payload())
         cert_id = result["cert_id"]
-        self.server.set_certificate_status(cert_id, "CANCELLED", "관리자 취소")
+        self.server.set_certificate_status(cert_id, "CANCELLED", "admin cancel")
 
         reissued = self.server.save_certificate(cert_id, b"\x89PNG\r\n\x1a\nreissued")
 
         self.assertEqual(reissued["cert_id"], cert_id)
         self.assertEqual(reissued["cert_status"], "CANCELLED")
         self.assertTrue(reissued["certificate_path"].endswith(f"CERT_{cert_id}.png"))
+
+    def test_sqlite_result_selection_keeps_revisions_separate_and_csv_values_safe(self):
+        self.server.insert_result(self.payload(80, "E100", "2026-06-13T10:00:00Z", "1"))
+        best = self.server.insert_result(self.payload(95, "E100", "2026-06-14T10:00:00Z", "1"))
+        revision_two = self.server.insert_result(self.payload(75, "E100", "2026-06-15T10:00:00Z", "2"))
+
+        all_rows = self.server.search_results({"search": ["E100"], "mode": ["allAttempts"]})
+        latest = self.server.search_results({"search": ["E100"], "mode": ["latestPerEmployee"]})
+        selected_best = self.server.search_results({"search": ["E100"], "mode": ["bestPerEmployee"]})
+
+        self.assertEqual(len(all_rows), 3)
+        self.assertEqual({row["result_id"] for row in latest}, {best["result_id"], revision_two["result_id"]})
+        self.assertEqual({row["result_id"] for row in selected_best}, {best["result_id"], revision_two["result_id"]})
+        self.assertEqual(self.server.csv_safe("=SUM(1,1)"), "'=SUM(1,1)")
 
 
 if __name__ == "__main__":
