@@ -1,75 +1,145 @@
 # 도메인 모델
 
-## 1. 핵심 엔터티
+## 1. 제품 도메인 개요
+
+도메인은 필기시험 단일 흐름에서 검사원 자격 인증 평가 흐름으로 확장한다. 기존 필기시험 모델은 유지하되, 자격 유형, 평가 계획, 평가 세션, R&R, 교육 이수, 자격 판정, 인증서 이력을 상위 모델로 연결한다.
+
+## 2. 기존 필기시험 모델
 
 | 엔터티 | 주요 속성 | 책임 |
 | --- | --- | --- |
-| `Exam` | ID, 제목, 유의사항, 제한 시간, 만점, 결과 공개 정책 | 한 시험의 기본 설정 관리 |
+| `Exam` | ID, 코드, revision, 제목, 제한 시간, 만점, 합격 기준 | 필기시험 마스터 |
 | `Question` | ID, 시험 ID, 유형, 본문, 배점, 순서, 해설 | 응시 문항 정의 |
 | `Choice` | ID, 문제 ID, 표시 내용, 순서 | 객관식 선택지 정의 |
 | `ScoringRule` | 문제 ID, 정답, 정규화 규칙, 부분 점수 정책 | 문항별 평가 기준 정의 |
-| `Attempt` | ID, 시험 ID, 상태, 시작·제출 시각 | 현재 실행에서 한 번의 응시 생명주기 관리 |
-| `Answer` | 응시 ID, 문제 ID, 값, 변경 시각 | 문제별 현재 답안 관리 |
-| `Submission` | ID, 응시 ID, 제출 시각, 답안 스냅샷 | 제출 시점의 변경 불가능한 응답 보존 |
-| `GradeResult` | 제출 ID, 총점, 만점, 문항별 결과, 검토 필요 여부 | 평가·채점 결과 제공 |
+| `Attempt` | attemptId, examineeId, assessmentSessionId, examId, 상태 | 한 번의 필기시험 응시 생명주기 |
+| `Answer` | attemptId, questionId, 값, 변경 시각 | 제출 전 문제별 현재 답안 |
+| `Submission` | attemptId, 제출 시각, answersJson, locked | 제출 시점의 변경 불가능한 답안 스냅샷 |
+| `GradeResult` | attemptId, 점수, 만점, 합격 상태, 등급, 문항별 결과 | 필기시험 채점 결과 |
 
-온라인 사용자, 배정, 서버 감사 이벤트는 MVP 모델에 포함하지 않는다. 응시자 식별자가 필요하면 결과 저장 시 선택적 메타데이터로만 추가한다.
+## 3. 자격 인증 상위 모델
 
-## 2. 응시 상태
+| 엔터티 | 주요 속성 | 책임 |
+| --- | --- | --- |
+| `Examinee` | 사번, 성명, 부서, 직책, 활성 상태 | 응시자와 검사원 기본 정보 |
+| `QualificationType` | code, name, description, active | 자격 유형 마스터 |
+| `AssessmentPlan` | qualificationTypeId, revision, required flags, passRuleJson | 자격 유형별 필수 평가 계획 |
+| `AssessmentSession` | sessionCode, examineeId, qualificationTypeId, assessmentPlanId, status | 한 응시자의 자격 평가 묶음 |
+| `CertificationDecision` | sessionId, decision, reason, missingRequirementsJson, approvedBy | 최종 자격 판정 |
+| `Certificate` | certId, sessionId, issueDate, expireDate, path, hash, status | 인증서 발행·취소·재발행 이력 |
+| `AuditLog` | entityType, entityId, action, actor, reason, beforeJson, afterJson | 주요 변경과 발행 이력 감사 |
 
-- `READY`: 시험지 검증을 마치고 시작을 기다리는 상태
-- `IN_PROGRESS`: 답안 조회·변경이 가능한 상태
-- `SUBMITTED`: 제출 스냅샷이 확정되어 답안을 변경할 수 없는 상태
-- `GRADED`: 자동 평가와 총점 계산이 완료된 상태
-- `INVALID`: 시험지 검증 실패로 응시할 수 없는 상태
+## 4. 평가별 모델
 
-## 3. 상태 전이
+### 4.1 `WrittenExamResult`
 
-| 현재 상태 | 이벤트 | 다음 상태 | 조건 |
-| --- | --- | --- | --- |
-| 없음 | 시험지 불러오기 | `READY` | 시험지 구조와 채점 기준이 유효함 |
-| 없음 | 잘못된 시험지 불러오기 | `INVALID` | 필수 필드 또는 규칙 검증 실패 |
-| `READY` | 시험 시작 | `IN_PROGRESS` | 사용자가 시작을 확인함 |
-| `IN_PROGRESS` | 최종 제출 또는 시간 만료 | `SUBMITTED` | 현재 답안 스냅샷 생성 성공 |
-| `SUBMITTED` | 채점 실행 | `GRADED` | 모든 문항이 채점 또는 검토 필요로 분류됨 |
+필기시험 결과는 기존 `GradeResult`를 자격 평가 세션에 연결해 사용한다. 필수 평가 여부와 합격 기준은 `AssessmentPlan`과 `Exam.revision` 기준으로 판정한다.
 
-`GRADED`와 `INVALID`는 종결 상태다. 재응시는 새 `Attempt`를 생성해 시작한다.
+### 4.2 계수형 R&R 모델
 
-## 4. 시간 규칙
+| 엔터티 | 주요 속성 | 책임 |
+| --- | --- | --- |
+| `AttributeRrSet` | rrSetCode, revision, title, sampleMode, roundCount, criteriaJson | 계수형 R&R 세트 정의 |
+| `AttributeRrSample` | rrSetId, sampleCode, sampleMode, imagePath, imageHash, physicalSampleCode, referenceStatus, defectType | 기준 샘플 마스터 |
+| `AttributeRrTrial` | trialId, sessionId, rrSetId, sampleId, examineeId, roundNo, judgment, defectType, locked | 검사원 판정 원본 |
+| `AttributeRrResult` | totalAgreementRate, okAgreementRate, ngDetectionRate, repeatAgreementRate, type1ErrorRate, type2ErrorRate, finalDecision | 계수형 R&R 산출 결과 |
 
-- `startedAt`, `submittedAt`은 현재 실행 환경의 시각을 기록한다.
-- 제한 시간은 단조 시계 기반 경과 시간으로 계산해 시스템 시각 변경 영향을 줄인다.
-- 화면 타이머는 표시와 로컬 만료 처리에만 사용한다.
-- 시간 만료 시 동작은 시험지 정책에 따라 제출 확인 또는 자동 제출로 정한다.
-- 온라인 서버가 없으므로 시각 위변조 방지나 중앙 시간 증명은 제공하지 않는다.
+사진 기반 샘플은 독립 평가가 아니라 `AttributeRrSample.sampleMode=image`로 표현한다. 실물 샘플은 `sampleMode=physical_sample`, 혼합 세트는 `AttributeRrSet.sampleMode=mixed`로 표현한다.
 
-## 5. 불변 조건
+### 4.3 계량형 R&R 모델
 
-1. `IN_PROGRESS` 상태에서만 `Answer`를 변경할 수 있다.
-2. 하나의 `Attempt`에는 하나의 `Submission`만 존재한다.
-3. `Submission`은 제출 시점의 모든 답안을 스냅샷으로 보존한다.
-4. `SUBMITTED` 이후에는 제출 답안을 변경할 수 없다.
-5. 각 문항의 최대 획득 점수는 해당 문항 배점을 초과할 수 없다.
-6. 총점은 문항별 획득 점수의 합이며 만점을 초과할 수 없다.
-7. 동일한 시험지, 답안, 채점 규칙은 항상 동일한 결과를 생성한다.
+| 엔터티 | 주요 속성 | 책임 |
+| --- | --- | --- |
+| `VariableRrStudy` | studyCode, revision, studyPurpose, measurementItem, unit, instrument, lsl, usl, partCount, trialCount, method, criteriaJson | 계량형 R&R 평가 계획 |
+| `VariableMeasurement` | sessionId, studyId, examineeId, partNo, trialNo, measurementValue, locked | 측정 원본 |
+| `VariableRrResult` | ev, av, grr, partVariation, totalVariation, percentGrr, ndc, tolerance, percentTolerance, finalDecision | 계량형 R&R 산출 결과 |
 
-## 6. 채점 절차
+`studyPurpose`는 `process_msa`와 `inspector_qualification`을 구분한다. 이번 리뉴얼의 기본 목적은 `inspector_qualification`이다.
 
-1. 제출 스냅샷을 읽는다.
-2. 시험지 순서대로 각 문항과 대응 답안을 찾는다.
-3. 문제 유형과 `ScoringRule`에 따라 답안을 정규화하고 비교한다.
-4. `correct`, `incorrect`, `unanswered`, `review_required` 중 하나로 분류한다.
-5. 문항별 획득 점수를 계산한다.
-6. 획득 점수를 한 번 합산해 총점과 검토 필요 여부를 확정한다.
-7. 공개 정책에 따라 정답과 해설을 결과 화면에 포함한다.
+### 4.4 교육 이수 모델
 
-채점은 외부 API나 네트워크 I/O 없이 순수한 로컬 계산으로 수행한다.
+| 엔터티 | 주요 속성 | 책임 |
+| --- | --- | --- |
+| `TrainingRecord` | examineeId, qualificationTypeId, trainingCode, completedAt, hours, evidencePath, verifiedBy, status | 교육 이수와 증빙 충족 여부 |
 
+교육 시간은 점수 항목이 아니라 필수 충족 항목이다.
 
-## 시험 버전과 응시 이력
+## 5. SQLite 테이블 초안
 
-- `Exam.revision`: 1 이상의 정수다. 문항, 배점, 합격 기준처럼 통계 비교 가능성에 영향을 주는 내용이 바뀌면 증가시킨다.
-- `AttemptRecord.attemptId`: 제출마다 생성하는 고유 ID다. 원본 응시 이력은 덮어쓰지 않는다.
-- 저장 단위는 `(examId, revision)`이며 서로 다른 버전은 병합하지 않는다.
-- 응시자 식별은 사번을 우선하고, 사번이 없는 가져오기 데이터는 성명과 응시 ID를 대체 키로 사용한다.
-- 운영 통계의 기본값은 응시자별 최신 결과이며 전체 응시와 최고 결과는 조회 필터로 제공한다.
+SQLite는 원본 저장소다. 핵심 테이블은 다음과 같다.
+
+```text
+examinees
+qualification_types
+assessment_plans
+assessment_sessions
+exams
+attempts
+submissions
+grade_results
+attribute_rr_sets
+attribute_rr_samples
+attribute_rr_trials
+attribute_rr_results
+variable_rr_studies
+variable_measurements
+variable_rr_results
+training_records
+certification_decisions
+certificates
+audit_logs
+```
+
+### 5.1 필수 필드 요약
+
+- `assessment_plans`: `requires_written_exam`, `requires_attribute_rr`, `requires_variable_rr`, `requires_training`, `attribute_rr_required_mode`, `variable_rr_required_condition`, `pass_rule_json`
+- `attribute_rr_results`: `total_agreement_rate`, `ok_agreement_rate`, `ng_detection_rate`, `repeat_agreement_rate`, `type1_error_rate`, `type2_error_rate`, `defect_type_agreement_rate`, `final_decision`
+- `variable_rr_results`: `ev`, `av`, `grr`, `part_variation`, `total_variation`, `percent_grr`, `ndc`, `tolerance`, `percent_tolerance`, `final_decision`
+- `certificates`: `cert_id`, `certificate_path`, `certificate_hash`, `status`, `issued_by`, `issued_at`, `revoked_reason`
+
+## 6. 불변 조건
+
+1. 하나의 `Attempt`에는 하나의 `Submission`만 존재한다.
+2. 제출 이후 `Submission.answers_json`은 수정하지 않는다.
+3. 제출 이후 `AttributeRrTrial.locked=true`인 판정 원본은 수정하지 않는다.
+4. 확정 이후 `VariableMeasurement.locked=true`인 측정 원본은 수정하지 않는다.
+5. 시험·평가 기준이 변경되면 기존 결과를 수정하지 않고 `revision`을 증가시킨다.
+6. 인증서는 `CertificationDecision.decision=approved`일 때만 발행한다.
+7. 인증서 재발행 또는 취소 시 기존 `Certificate` 이력을 삭제하지 않는다.
+8. CSV import 또는 export가 있어도 원본 판정 기준은 SQLite에 있다.
+
+## 7. 계수형 R&R 계산 기준
+
+```text
+total_agreement_rate = 기준값과 검사원 판정이 일치한 건수 / 전체 판정 건수
+ok_agreement_rate = 기준 OK 샘플을 OK로 판정한 건수 / 기준 OK 샘플 판정 건수
+ng_detection_rate = 기준 NG 샘플을 NG로 판정한 건수 / 기준 NG 샘플 판정 건수
+type1_error_rate = 기준 OK 샘플을 NG로 판정한 건수 / 기준 OK 샘플 판정 건수
+type2_error_rate = 기준 NG 샘플을 OK로 판정한 건수 / 기준 NG 샘플 판정 건수
+repeat_agreement_rate = 동일 샘플 반복 제시 시 동일 판정을 유지한 비율
+defect_type_agreement_rate = NG 판정 중 불량 유형까지 기준과 일치한 비율
+```
+
+## 8. 계량형 R&R 계산 기준
+
+초기 구현은 `range` 방식을 우선한다. 산출 결과에는 EV, AV, GRR, Part Variation, Total Variation, %GRR, ndc, 공차 대비 변동을 포함한다. 기준값은 `criteria_json`으로 관리하며 예시는 다음과 같다.
+
+```json
+{
+  "maxPercentGrrPass": 10,
+  "maxPercentGrrConditional": 30,
+  "minNdc": 5
+}
+```
+
+## 9. 인증서 발행 차단 조건
+
+다음 중 하나라도 해당하면 인증서 발행을 차단한다.
+
+- 필수 필기시험 결과 누락 또는 불합격
+- 필기시험 항목별 과락 기준 미충족
+- 필수 계수형 R&R 결과 누락 또는 기준 미달
+- 계측기 사용 검사자의 필수 계량형 R&R 결과 누락 또는 기준 미달
+- 필수 교육 기록, 교육 시간, 증빙 누락
+- 검토자 승인 누락
+- `certification_decision`이 `approved`가 아님
