@@ -1169,6 +1169,54 @@ def create_variable_rr_study(payload: dict) -> dict:
         return row_to_dict(connection.execute("SELECT * FROM variable_rr_studies WHERE variable_rr_study_id = ?", (cursor.lastrowid,)).fetchone())
 
 
+
+def parse_variable_measurements_csv(csv_text: str) -> list[dict]:
+    if not isinstance(csv_text, str) or not csv_text.strip():
+        raise ValueError("csv_text must be a non-empty string.")
+    reader = csv.DictReader(io.StringIO(csv_text.lstrip("\ufeff")))
+    if not reader.fieldnames:
+        raise ValueError("CSV header is required.")
+
+    normalized_headers = {str(name).strip().lower(): name for name in reader.fieldnames}
+
+    def header(*names: str) -> str:
+        for name in names:
+            if name in normalized_headers:
+                return normalized_headers[name]
+        raise ValueError(f"CSV header is missing: {names[0]}")
+
+    part_header = header("part_no", "partno", "part", "부품", "부품번호")
+    trial_header = header("trial_no", "trialno", "trial", "반복", "반복번호")
+    value_header = header("measurement_value", "value", "measurement", "측정값")
+    measured_at_header = normalized_headers.get("measured_at") or normalized_headers.get("measuredat")
+
+    measurements = []
+    for row_number, row in enumerate(reader, start=2):
+        if not any(str(value or "").strip() for value in row.values()):
+            continue
+        try:
+            item = {
+                "part_no": int_value(row.get(part_header)),
+                "trial_no": int_value(row.get(trial_header)),
+                "measurement_value": float_value(row.get(value_header)),
+            }
+        except ValueError as error:
+            raise ValueError(f"CSV row {row_number} has an invalid measurement value.") from error
+        if measured_at_header and str(row.get(measured_at_header, "")).strip():
+            item["measured_at"] = str(row[measured_at_header]).strip()
+        measurements.append(item)
+    if not measurements:
+        raise ValueError("CSV must contain at least one measurement row.")
+    return measurements
+
+
+def submit_variable_measurements_csv(payload: dict) -> dict:
+    csv_text = payload_value(payload, "csv_text", "csvText", "csv")
+    return submit_variable_measurements({
+        **payload,
+        "measurements": parse_variable_measurements_csv(csv_text),
+    })
+
 def submit_variable_measurements(payload: dict) -> dict:
     now = utc_now()
     session_id = int_value(payload_value(payload, "assessment_session_id", "sessionId"))
@@ -1925,6 +1973,9 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/variable-rr/measurements":
                 self.send_json({"result": submit_variable_measurements(self.read_json())}, HTTPStatus.CREATED)
+                return
+            if parsed.path == "/api/variable-rr/measurements.csv":
+                self.send_json({"result": submit_variable_measurements_csv(self.read_json())}, HTTPStatus.CREATED)
                 return
             if parsed.path == "/api/certification/readiness":
                 payload = self.read_json()
