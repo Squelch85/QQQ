@@ -460,6 +460,48 @@ class ServerStorageTest(unittest.TestCase):
         self.assertTrue(ready["ready"])
         self.assertEqual(ready["status"], "approved")
 
+    def test_variable_rr_submission_rejects_duplicate_and_out_of_plan_measurements(self):
+        session = self.server.create_assessment_session(
+            {
+                "employee_id": "E-RR-VALID",
+                "employee_name": "RR Validate",
+                "exam_type": "AOI-RR",
+                "exam_name": "AOI RR qualification",
+            }
+        )
+        study = self.server.create_variable_rr_study(
+            {
+                "study_code": "DIM-RR-VALID",
+                "measurement_item": "Width",
+                "part_count": 2,
+                "trial_count": 2,
+            }
+        )
+
+        base_payload = {
+            "assessment_session_id": session["assessment_session_id"],
+            "variable_rr_study_id": study["variable_rr_study_id"],
+        }
+        with self.assertRaisesRegex(ValueError, "duplicate part_no/trial_no"):
+            self.server.submit_variable_measurements(
+                {
+                    **base_payload,
+                    "measurements": [
+                        {"partNo": 1, "trialNo": 1, "value": 10.00},
+                        {"partNo": 1, "trialNo": 1, "value": 10.01},
+                    ],
+                }
+            )
+        with self.assertRaisesRegex(ValueError, "outside the study plan"):
+            self.server.submit_variable_measurements(
+                {
+                    **base_payload,
+                    "measurements": [
+                        {"partNo": 3, "trialNo": 1, "value": 10.00},
+                    ],
+                }
+            )
+
     def test_sqlite_result_selection_keeps_revisions_separate_and_csv_values_safe(self):
         self.server.insert_result(self.payload(80, "E100", "2026-06-13T10:00:00Z", "1"))
         best = self.server.insert_result(self.payload(95, "E100", "2026-06-14T10:00:00Z", "1"))
