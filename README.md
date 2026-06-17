@@ -79,6 +79,7 @@ SQLite 원본 저장 / 로컬 조회 / CSV 내보내기
 | [시스템 아키텍처](docs/architecture.md) | 현재 구현 모듈, 목표 모듈, SQLite 원본 저장소, CSV 경계 |
 | [보안 기준](docs/security.md) | 정답·기준값 노출 방지, 개인정보 최소화, 파일 무결성 |
 | [품질 전략](docs/quality-strategy.md) | 현재 자동화 테스트, 향후 테스트 게이트, 성능 기준 |
+| [성능 측정 템플릿](docs/performance-template.md) | 성능 PR의 중앙값/IQR, 입력 규모, 예외 사유 기록 양식 |
 | [구현 로드맵](docs/roadmap.md) | 문서 정합성부터 인증서 개선까지 단계별 작업 |
 
 ## 이번 PR 범위
@@ -92,7 +93,10 @@ SQLite 원본 저장 / 로컬 조회 / CSV 내보내기
 ```bash
 npm test
 npm run check
+npm run benchmark:report
 npm start
 ```
+
+`npm run benchmark:report`는 성능에 영향을 줄 수 있는 리포트 CSV 생성·파싱 변경의 재현 가능한 중앙값/IQR 확인에 사용합니다. 성능 PR은 `docs/quality-strategy.md`와 `docs/performance-template.md` 기준에 따라 한국어로 측정 결과 또는 생략 사유를 기록합니다.
 
 서버 실행 후 브라우저에서 `http://localhost:4173`을 열어 JSON 시험지를 선택합니다. 현재 구현의 필기시험 결과 저장 동작은 후속 SQLite 전환 작업에서 문서 기준과 맞추어 정리합니다.
