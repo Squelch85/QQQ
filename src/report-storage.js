@@ -30,13 +30,16 @@ function readLegacyJsonRecords(value) {
 }
 
 function reportMatchesExam(report, exam) {
-  const reportQuestions = report.questionStats.map(({ questionId, prompt }) => [questionId, prompt]);
-  const examQuestions = exam.questions.map(({ id, prompt }) => [id, prompt]);
-  return report.examId === exam.id
-    && report.examRevision === (exam.revision ?? 1)
-    && report.examTitle === exam.title
-    && report.passingScore === (exam.passingScore ?? 80)
-    && JSON.stringify(reportQuestions) === JSON.stringify(examQuestions);
+  if (report.examId !== exam.id
+    || report.examRevision !== (exam.revision ?? 1)
+    || report.examTitle !== exam.title
+    || report.passingScore !== (exam.passingScore ?? 80)) return false;
+
+  if (!Array.isArray(report.questionStats) || report.questionStats.length !== exam.questions.length) return false;
+  return report.questionStats.every((question, index) => {
+    const examQuestion = exam.questions[index];
+    return question.questionId === examQuestion.id && question.prompt === examQuestion.prompt;
+  });
 }
 
 function migrateLegacyStorage(storage, exam) {
