@@ -26,6 +26,7 @@
           <button id="show-converter-button" class="secondary">문항 JSON 변환</button>
           <button id="show-verify-button" class="secondary">인증 ID 검증</button>
           <button id="show-admin-button" class="secondary">결과 관리</button>
+          <button id="show-assessment-button" class="secondary">통합 평가 구성</button>
           <label class="secondary button-label" for="report-file">CSV 리포트 불러오기</label>
           <input id="report-file" type="file" accept="text/csv,.csv">
         </div>
@@ -164,6 +165,64 @@
         <div class="table-wrap"><table><thead><tr><th>응시일시</th><th>성명</th><th>사번</th><th>부서</th><th>점수</th><th>합격 여부</th></tr></thead><tbody id="loaded-report-body"></tbody></table></div>
       </section>
       <div class="result-actions"><button class="text-button home-button">처음으로</button></div>
+    </section>
+
+
+    <section id="assessment-view" class="panel result-panel" hidden aria-labelledby="assessment-title">
+      <p class="eyebrow">ASSESSMENT WORKFLOW</p>
+      <h1 id="assessment-title" tabindex="-1">통합 평가 구성</h1>
+      <p class="lead small">수검자와 자격 요구사항을 연결한 뒤 계수형 R&amp;R, 계량형 R&amp;R, 교육 검증, 자격 판정을 순서대로 저장합니다.</p>
+      <form id="assessment-session-form" class="form-grid">
+        <label>성명<input name="employee_name" required maxlength="50"></label>
+        <label>사번<input name="employee_id" required maxlength="50"></label>
+        <label>부서<input name="department" maxlength="80"></label>
+        <label>자격 코드<input name="qualification_code" value="GRR-WT" required></label>
+        <label>자격명<input name="qualification_name" value="검사원 통합 자격" required></label>
+        <label>계수형 R&amp;R 필수<select name="requires_attribute_rr"><option value="1">필수</option><option value="0">선택</option></select></label>
+        <label>계량형 R&amp;R 필수<select name="requires_variable_rr"><option value="1">필수</option><option value="0">선택</option></select></label>
+        <label>교육 필수<select name="requires_training"><option value="1">필수</option><option value="0">선택</option></select></label>
+        <button class="primary">평가 세션 생성</button>
+      </form>
+      <p id="assessment-session-status" class="storage-status" role="status">평가 세션을 먼저 생성하세요.</p>
+      <div class="workflow-grid">
+        <form id="attribute-rr-form" class="workflow-card">
+          <h2>계수형 R&amp;R 등록·응시</h2>
+          <label>세트명<input name="title" value="외관 OK/NG 판정" required></label>
+          <label>샘플 판정(한 줄: 샘플코드,기준OK/NG,응시OK/NG)<textarea name="samples" rows="4">S-01,OK,OK
+S-02,NG,NG
+S-03,OK,OK</textarea></label>
+          <button class="secondary">샘플 세트 생성 및 판정 제출</button>
+          <pre id="attribute-rr-output" class="verification-result">대기 중</pre>
+        </form>
+        <form id="variable-rr-form" class="workflow-card">
+          <h2>계량형 R&amp;R 등록·측정</h2>
+          <label>측정 항목<input name="measurement_item" value="두께" required></label>
+          <label>단위<input name="unit" value="mm"></label>
+          <label>측정 CSV(part_no,trial_no,measurement_value)<textarea name="csv_text" rows="5">part_no,trial_no,measurement_value
+1,1,10.01
+1,2,10.02
+2,1,10.40
+2,2,10.41</textarea></label>
+          <button class="secondary">측정 계획 생성 및 CSV 제출</button>
+          <pre id="variable-rr-output" class="verification-result">대기 중</pre>
+        </form>
+        <form id="training-form" class="workflow-card">
+          <h2>교육 이수 검증</h2>
+          <label>교육명<input name="training_title" value="검사원 필수 교육" required></label>
+          <label>이수일<input name="completed_at" type="date" required></label>
+          <label>이수 시간<input name="hours" type="number" min="0" step="0.5" value="2"></label>
+          <label>증빙 경로<input name="evidence_path" placeholder="evidence/training.pdf"></label>
+          <button class="secondary">교육 검증 저장</button>
+          <pre id="training-output" class="verification-result">대기 중</pre>
+        </form>
+        <form id="readiness-form" class="workflow-card">
+          <h2>자격 판정·인증서 발행 준비</h2>
+          <label>승인자<input name="approved_by" placeholder="검토자명"></label>
+          <button class="primary">준비 상태 조회 및 승인</button>
+          <pre id="readiness-output" class="verification-result">대기 중</pre>
+        </form>
+      </div>
+      <button class="text-button home-button">처음으로</button>
     </section>
 
     <section id="verify-view" class="panel" hidden aria-labelledby="verify-title">

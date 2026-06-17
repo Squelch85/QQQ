@@ -2224,6 +2224,14 @@ async function submitVariableMeasurementsCsv(payload) {
   })).result;
 }
 
+async function createTrainingRecord(payload) {
+  return (await request("/api/training-records", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  })).training_record;
+}
+
 async function validateCertificationReadiness(sessionId, qualificationTypeId = null, examineeId = null) {
   const body = {
     assessment_session_id: sessionId,
@@ -2289,7 +2297,7 @@ function createLegacyReportExport(exam, records) {
 }
 
 // ---- src/app.js ----
-const viewIds = ["load-view", "converter-view", "ready-view", "exam-view", "result-view", "report-view", "verify-view", "admin-view"];
+const viewIds = ["load-view", "converter-view", "ready-view", "exam-view", "result-view", "report-view", "assessment-view", "verify-view", "admin-view"];
 const views = viewIds.map((id) => document.getElementById(id));
 const fileInput = document.getElementById("exam-file");
 const fileError = document.getElementById("file-error");
@@ -2309,6 +2317,7 @@ let lastCertificateResult = null;
 let certificatePreviewUrl = null;
 let certificateBlob = null;
 let adminCertificatePreviewUrl = null;
+let activeAssessmentSession = null;
 
 function revokePreviewUrl(name) {
   const url = name === "admin" ? adminCertificatePreviewUrl : certificatePreviewUrl;
@@ -2791,6 +2800,7 @@ document.getElementById("certificate-download-button").addEventListener("click",
 });
 document.getElementById("show-verify-button").addEventListener("click", () => showView("verify-view"));
 document.getElementById("show-admin-button").addEventListener("click", () => { showView("admin-view"); void loadAdminResults(); });
+document.getElementById("show-assessment-button").addEventListener("click", () => { showView("assessment-view"); document.getElementById("assessment-title").focus({ preventScroll: true }); });
 document.getElementById("verify-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const output = document.getElementById("verify-result");
@@ -2805,6 +2815,104 @@ document.getElementById("verify-form").addEventListener("submit", async (event) 
     ].join("\n");
   } catch (error) {
     output.textContent = error instanceof Error ? error.message : "조회하지 못했습니다.";
+  }
+});
+
+function requireAssessmentSession() {
+  if (!activeAssessmentSession) throw new Error("평가 세션을 먼저 생성하세요.");
+  return activeAssessmentSession.assessment_session_id;
+}
+
+function prettyJson(value) {
+  return JSON.stringify(value, null, 2);
+}
+
+document.getElementById("assessment-session-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(event.currentTarget));
+  const status = document.getElementById("assessment-session-status");
+  try {
+    activeAssessmentSession = await createAssessmentSession({
+      ...data,
+      requires_written_exam: 1,
+      requires_attribute_rr: Number(data.requires_attribute_rr),
+      requires_variable_rr: Number(data.requires_variable_rr),
+      requires_training: Number(data.requires_training)
+    });
+    status.textContent = `세션 ${activeAssessmentSession.session_code} 생성 완료 · ID ${activeAssessmentSession.assessment_session_id}`;
+  } catch (error) {
+    status.textContent = error instanceof Error ? error.message : "평가 세션 생성 실패";
+  }
+});
+
+document.getElementById("attribute-rr-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const output = document.getElementById("attribute-rr-output");
+  try {
+    const sessionId = requireAssessmentSession();
+    const data = Object.fromEntries(new FormData(event.currentTarget));
+    const parsed = data.samples.split("\n").map((line) => line.split(",").map((part) => part.trim())).filter((parts) => parts.length >= 3 && parts[0]);
+    const rrSet = await createAttributeRrSet({
+      rr_set_code: `ATTR-${Date.now()}`,
+      title: data.title,
+      sample_mode: "image",
+      round_count: 1,
+      criteria: { min_total_agreement_rate: 0.8, min_repeat_agreement_rate: 0.8, max_type1_error_rate: 0.2, max_type2_error_rate: 0.2 },
+      samples: parsed.map(([sampleCode, referenceStatus], index) => ({ sample_code: sampleCode, reference_status: referenceStatus.toUpperCase(), display_order: index + 1 }))
+    });
+    const result = await submitAttributeRrTrials({
+      assessment_session_id: sessionId,
+      attribute_rr_set_id: rrSet.attribute_rr_set_id,
+      trials: parsed.map(([, , judgment], index) => ({ attribute_rr_sample_id: rrSet.samples[index].attribute_rr_sample_id, round_no: 1, judgment: judgment.toUpperCase() }))
+    });
+    output.textContent = prettyJson(result);
+  } catch (error) {
+    output.textContent = error instanceof Error ? error.message : "계수형 R&R 제출 실패";
+  }
+});
+
+document.getElementById("variable-rr-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const output = document.getElementById("variable-rr-output");
+  try {
+    const sessionId = requireAssessmentSession();
+    const data = Object.fromEntries(new FormData(event.currentTarget));
+    const rows = data.csv_text.trim().split("\n").slice(1).map((line) => line.split(","));
+    const partCount = new Set(rows.map(([partNo]) => partNo.trim())).size;
+    const trialCount = new Set(rows.map(([, trialNo]) => trialNo.trim())).size;
+    const study = await createVariableRrStudy({ study_code: `VAR-${Date.now()}`, measurement_item: data.measurement_item, unit: data.unit, part_count: partCount, trial_count: trialCount, criteria: { max_percent_grr: 30 } });
+    const result = await submitVariableMeasurementsCsv({ assessment_session_id: sessionId, variable_rr_study_id: study.variable_rr_study_id, csv_text: data.csv_text });
+    output.textContent = prettyJson(result);
+  } catch (error) {
+    output.textContent = error instanceof Error ? error.message : "계량형 R&R 제출 실패";
+  }
+});
+
+document.getElementById("training-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const output = document.getElementById("training-output");
+  try {
+    const record = await createTrainingRecord({ assessment_session_id: requireAssessmentSession(), ...Object.fromEntries(new FormData(event.currentTarget)), status: "verified" });
+    output.textContent = prettyJson(record);
+  } catch (error) {
+    output.textContent = error instanceof Error ? error.message : "교육 검증 저장 실패";
+  }
+});
+
+document.getElementById("readiness-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const output = document.getElementById("readiness-output");
+  try {
+    const sessionId = requireAssessmentSession();
+    const readiness = await validateCertificationReadiness(sessionId);
+    const form = Object.fromEntries(new FormData(event.currentTarget));
+    let decision = null;
+    if (readiness.status === "pending" && readiness.missing_requirements.length === 0) {
+      decision = await createCertificationDecision({ assessment_session_id: sessionId, decision: "approved", approved_by: form.approved_by });
+    }
+    output.textContent = prettyJson({ readiness, decision });
+  } catch (error) {
+    output.textContent = error instanceof Error ? error.message : "자격 판정 실패";
   }
 });
 
