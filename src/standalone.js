@@ -1559,6 +1559,7 @@ const REPORT_SCHEMA_VERSION = 2;
 const LEGACY_CSV_FIXED_HEADERS = ["리포트 버전", "생성일시", "시험 ID", "시험 제목", "합격 점수", "응시일시", "성명", "사번", "부서", "점수", "만점", "합격 여부"];
 const CSV_FIXED_HEADERS = ["리포트 버전", "생성일시", "시험 ID", "시험 버전", "시험 제목", "합격 점수", "응시 ID", "응시일시", "성명", "사번", "부서", "점수", "만점", "합격 여부"];
 const QUESTION_HEADER_PREFIX = "문항 결과 ";
+const QUESTION_HEADER_PATTERN = /^문항 결과 \[([^\]]+)\] (.+)$/s;
 const STATUS_LABELS = { correct: "정답", incorrect: "오답", unanswered: "미응답", review_required: "검토 필요" };
 const STATUS_VALUES = new Map(Object.entries(STATUS_LABELS).map(([value, label]) => [label, value]));
 const REPORT_MODES = new Set(["allAttempts", "latestPerEmployee", "bestPerEmployee"]);
@@ -1789,7 +1790,7 @@ function parseRequiredNumber(value, label) {
 
 function parseQuestions(headers, fixedHeaderCount) {
   return headers.slice(fixedHeaderCount).map((header, index) => {
-    const match = header.match(/^문항 결과 \[([^\]]+)\] (.+)$/s);
+    const match = header.match(QUESTION_HEADER_PATTERN);
     if (!match) throw new Error(`${index + 1}번째 문항 열 형식이 올바르지 않습니다.`);
     let questionId;
     try {
@@ -1835,13 +1836,15 @@ function parseReportCsv(text) {
     if (Number(values[0]) !== schemaVersion || values[1] !== generatedAt || restoreSpreadsheetFormula(values[2]) !== exam.id || !sameRevision || restoreSpreadsheetFormula(values[indexes.title]) !== exam.title || Number(values[indexes.passingScore]) !== exam.passingScore) {
       throw new Error(`${rowIndex + 2}행의 리포트 정보가 첫 번째 응시 결과와 다릅니다.`);
     }
-    const items = questions.flatMap((question, questionIndex) => {
+    const items = [];
+    for (let questionIndex = 0; questionIndex < questions.length; questionIndex += 1) {
+      const question = questions[questionIndex];
       const label = values[fixedHeaders.length + questionIndex];
-      if (!label) return [];
+      if (!label) continue;
       const status = STATUS_VALUES.get(label);
       if (!status) throw new Error(`${rowIndex + 2}행의 문항 결과 '${label}'을(를) 지원하지 않습니다.`);
-      return [{ questionId: question.id, status, prompt: question.prompt }];
-    });
+      items.push({ questionId: question.id, status, prompt: question.prompt });
+    }
     const submittedAt = values[indexes.submittedAt];
     return {
       attemptId: currentFormat ? restoreSpreadsheetFormula(values[indexes.attemptId]) : `legacy-${rowIndex + 1}-${submittedAt}`,
