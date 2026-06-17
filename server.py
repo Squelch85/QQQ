@@ -102,6 +102,8 @@ CREATE TABLE IF NOT EXISTS assessment_plans (
     requires_attribute_rr INTEGER NOT NULL DEFAULT 0 CHECK (requires_attribute_rr IN (0, 1)),
     requires_variable_rr INTEGER NOT NULL DEFAULT 0 CHECK (requires_variable_rr IN (0, 1)),
     requires_training INTEGER NOT NULL DEFAULT 0 CHECK (requires_training IN (0, 1)),
+    attribute_rr_required_mode TEXT NOT NULL DEFAULT '',
+    variable_rr_required_condition TEXT NOT NULL DEFAULT '',
     pass_rule_json TEXT NOT NULL DEFAULT '{}',
     active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
     created_at TEXT NOT NULL,
@@ -151,6 +153,150 @@ CREATE TABLE IF NOT EXISTS grade_results (
 );
 CREATE INDEX IF NOT EXISTS idx_grade_results_submission ON grade_results(submission_id);
 CREATE INDEX IF NOT EXISTS idx_grade_results_result ON grade_results(result_id);
+
+CREATE TABLE IF NOT EXISTS attribute_rr_sets (
+    attribute_rr_set_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rr_set_code TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+    title TEXT NOT NULL,
+    sample_mode TEXT NOT NULL CHECK (sample_mode IN ('image', 'physical_sample', 'mixed')),
+    round_count INTEGER NOT NULL DEFAULT 2 CHECK (round_count >= 1),
+    criteria_json TEXT NOT NULL DEFAULT '{}',
+    active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (rr_set_code, revision)
+);
+
+CREATE TABLE IF NOT EXISTS attribute_rr_samples (
+    attribute_rr_sample_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    attribute_rr_set_id INTEGER NOT NULL REFERENCES attribute_rr_sets(attribute_rr_set_id),
+    sample_code TEXT NOT NULL,
+    sample_mode TEXT NOT NULL CHECK (sample_mode IN ('image', 'physical_sample')),
+    image_path TEXT NOT NULL DEFAULT '',
+    image_hash TEXT NOT NULL DEFAULT '',
+    physical_sample_code TEXT NOT NULL DEFAULT '',
+    reference_status TEXT NOT NULL CHECK (reference_status IN ('OK', 'NG')),
+    defect_type TEXT NOT NULL DEFAULT '',
+    reference_note TEXT NOT NULL DEFAULT '',
+    display_order INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (attribute_rr_set_id, sample_code)
+);
+CREATE INDEX IF NOT EXISTS idx_attribute_rr_samples_set
+    ON attribute_rr_samples(attribute_rr_set_id, display_order);
+
+CREATE TABLE IF NOT EXISTS attribute_rr_trials (
+    attribute_rr_trial_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    assessment_session_id INTEGER NOT NULL REFERENCES assessment_sessions(assessment_session_id),
+    attribute_rr_set_id INTEGER NOT NULL REFERENCES attribute_rr_sets(attribute_rr_set_id),
+    attribute_rr_sample_id INTEGER NOT NULL REFERENCES attribute_rr_samples(attribute_rr_sample_id),
+    examinee_id INTEGER NOT NULL REFERENCES examinees(examinee_id),
+    round_no INTEGER NOT NULL CHECK (round_no >= 1),
+    judgment TEXT NOT NULL CHECK (judgment IN ('OK', 'NG')),
+    defect_type TEXT NOT NULL DEFAULT '',
+    locked INTEGER NOT NULL DEFAULT 1 CHECK (locked IN (0, 1)),
+    submitted_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (assessment_session_id, attribute_rr_sample_id, round_no)
+);
+CREATE INDEX IF NOT EXISTS idx_attribute_rr_trials_session
+    ON attribute_rr_trials(assessment_session_id, attribute_rr_set_id);
+
+CREATE TABLE IF NOT EXISTS attribute_rr_results (
+    attribute_rr_result_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    assessment_session_id INTEGER NOT NULL REFERENCES assessment_sessions(assessment_session_id),
+    attribute_rr_set_id INTEGER NOT NULL REFERENCES attribute_rr_sets(attribute_rr_set_id),
+    total_agreement_rate REAL NOT NULL,
+    ok_agreement_rate REAL NOT NULL,
+    ng_detection_rate REAL NOT NULL,
+    repeat_agreement_rate REAL NOT NULL,
+    type1_error_rate REAL NOT NULL,
+    type2_error_rate REAL NOT NULL,
+    defect_type_agreement_rate REAL NOT NULL,
+    final_decision TEXT NOT NULL CHECK (final_decision IN ('PASS', 'FAIL')),
+    calculated_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (assessment_session_id, attribute_rr_set_id)
+);
+
+CREATE TABLE IF NOT EXISTS variable_rr_studies (
+    variable_rr_study_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    study_code TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+    study_purpose TEXT NOT NULL DEFAULT 'inspector_qualification'
+        CHECK (study_purpose IN ('process_msa', 'inspector_qualification')),
+    measurement_item TEXT NOT NULL,
+    unit TEXT NOT NULL DEFAULT '',
+    instrument TEXT NOT NULL DEFAULT '',
+    lsl REAL,
+    usl REAL,
+    part_count INTEGER NOT NULL CHECK (part_count >= 2),
+    trial_count INTEGER NOT NULL CHECK (trial_count >= 2),
+    method TEXT NOT NULL DEFAULT 'range' CHECK (method IN ('range')),
+    criteria_json TEXT NOT NULL DEFAULT '{}',
+    active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (study_code, revision)
+);
+
+CREATE TABLE IF NOT EXISTS variable_measurements (
+    variable_measurement_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    assessment_session_id INTEGER NOT NULL REFERENCES assessment_sessions(assessment_session_id),
+    variable_rr_study_id INTEGER NOT NULL REFERENCES variable_rr_studies(variable_rr_study_id),
+    examinee_id INTEGER NOT NULL REFERENCES examinees(examinee_id),
+    part_no INTEGER NOT NULL CHECK (part_no >= 1),
+    trial_no INTEGER NOT NULL CHECK (trial_no >= 1),
+    measurement_value REAL NOT NULL,
+    locked INTEGER NOT NULL DEFAULT 1 CHECK (locked IN (0, 1)),
+    measured_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (assessment_session_id, variable_rr_study_id, part_no, trial_no)
+);
+CREATE INDEX IF NOT EXISTS idx_variable_measurements_session
+    ON variable_measurements(assessment_session_id, variable_rr_study_id);
+
+CREATE TABLE IF NOT EXISTS variable_rr_results (
+    variable_rr_result_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    assessment_session_id INTEGER NOT NULL REFERENCES assessment_sessions(assessment_session_id),
+    variable_rr_study_id INTEGER NOT NULL REFERENCES variable_rr_studies(variable_rr_study_id),
+    ev REAL NOT NULL,
+    av REAL NOT NULL,
+    grr REAL NOT NULL,
+    part_variation REAL NOT NULL,
+    total_variation REAL NOT NULL,
+    percent_grr REAL NOT NULL,
+    ndc REAL NOT NULL,
+    tolerance REAL,
+    percent_tolerance REAL,
+    final_decision TEXT NOT NULL CHECK (final_decision IN ('PASS', 'CONDITIONAL', 'FAIL')),
+    calculated_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (assessment_session_id, variable_rr_study_id)
+);
+
+CREATE TABLE IF NOT EXISTS training_records (
+    training_record_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    examinee_id INTEGER NOT NULL REFERENCES examinees(examinee_id),
+    qualification_type_id INTEGER NOT NULL REFERENCES qualification_types(qualification_type_id),
+    training_code TEXT NOT NULL,
+    training_title TEXT NOT NULL DEFAULT '',
+    completed_at TEXT NOT NULL,
+    hours REAL NOT NULL DEFAULT 0 CHECK (hours >= 0),
+    evidence_path TEXT NOT NULL DEFAULT '',
+    evidence_hash TEXT NOT NULL DEFAULT '',
+    verified_by TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'verified', 'rejected')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (examinee_id, qualification_type_id, training_code, completed_at)
+);
+CREATE INDEX IF NOT EXISTS idx_training_records_lookup
+    ON training_records(examinee_id, qualification_type_id, status);
 
 CREATE TABLE IF NOT EXISTS certification_decisions (
     certification_decision_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -205,6 +351,11 @@ MIGRATIONS = [
     (2, "assessment_source_of_truth", ASSESSMENT_SCHEMA),
 ]
 
+ASSESSMENT_SCHEMA_REPAIRS = [
+    "ALTER TABLE assessment_plans ADD COLUMN attribute_rr_required_mode TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE assessment_plans ADD COLUMN variable_rr_required_condition TEXT NOT NULL DEFAULT ''",
+]
+
 
 class ClosingConnection(sqlite3.Connection):
     def __exit__(self, exc_type, exc_value, traceback):
@@ -246,6 +397,12 @@ def initialize_database() -> None:
                     "INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
                     (version, name, utc_now()),
                 )
+        for statement in ASSESSMENT_SCHEMA_REPAIRS:
+            try:
+                connection.execute(statement)
+            except sqlite3.OperationalError as error:
+                if "duplicate column name" not in str(error).lower():
+                    raise
 
 
 def grade_for(score: float) -> str:

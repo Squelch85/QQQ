@@ -83,6 +83,91 @@ class ServerStorageTest(unittest.TestCase):
         rows = self.server.search_results({"search": ["LEGACY"]})
         self.assertEqual(rows[0]["employee_id"], "LEGACY")
 
+    def test_assessment_schema_includes_rr_training_tables_and_locks_source_rows(self):
+        with self.server.connect() as connection:
+            tables = {
+                row["name"]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            expected_tables = {
+                "attribute_rr_sets",
+                "attribute_rr_samples",
+                "attribute_rr_trials",
+                "attribute_rr_results",
+                "variable_rr_studies",
+                "variable_measurements",
+                "variable_rr_results",
+                "training_records",
+            }
+            self.assertTrue(expected_tables.issubset(tables))
+
+            session = self.server.create_assessment_session_in_connection(
+                connection,
+                {
+                    "employee_id": "E-RR-001",
+                    "employee_name": "RR Inspector",
+                    "exam_type": "AOI",
+                    "exam_name": "AOI inspector",
+                },
+                "2026-06-14T10:00:00Z",
+            )
+            examinee_id = session["examinee_id"]
+            rr_set_id = connection.execute(
+                """INSERT INTO attribute_rr_sets (
+                    rr_set_code, revision, title, sample_mode, round_count,
+                    criteria_json, created_at, updated_at
+                ) VALUES (
+                    'AOI-ATTR', 1, 'AOI image judgment', 'image', 2,
+                    '{}', '2026-06-14T10:00:00Z', '2026-06-14T10:00:00Z'
+                )"""
+            ).lastrowid
+            sample_id = connection.execute(
+                """INSERT INTO attribute_rr_samples (
+                    attribute_rr_set_id, sample_code, sample_mode, image_path,
+                    image_hash, reference_status, defect_type, created_at, updated_at
+                ) VALUES (?, 'S-001', 'image', 'samples/s001.png', 'abc', 'NG',
+                    'scratch', '2026-06-14T10:00:00Z', '2026-06-14T10:00:00Z')""",
+                (rr_set_id,),
+            ).lastrowid
+            trial_id = connection.execute(
+                """INSERT INTO attribute_rr_trials (
+                    assessment_session_id, attribute_rr_set_id, attribute_rr_sample_id,
+                    examinee_id, round_no, judgment, defect_type, submitted_at, created_at
+                ) VALUES (?, ?, ?, ?, 1, 'NG', 'scratch',
+                    '2026-06-14T10:01:00Z', '2026-06-14T10:01:00Z')""",
+                (session["assessment_session_id"], rr_set_id, sample_id, examinee_id),
+            ).lastrowid
+            measurement_study_id = connection.execute(
+                """INSERT INTO variable_rr_studies (
+                    study_code, revision, measurement_item, unit, instrument,
+                    part_count, trial_count, criteria_json, created_at, updated_at
+                ) VALUES (
+                    'DIM-RR', 1, 'Width', 'mm', 'Caliper', 10, 2, '{}',
+                    '2026-06-14T10:00:00Z', '2026-06-14T10:00:00Z'
+                )"""
+            ).lastrowid
+            measurement_id = connection.execute(
+                """INSERT INTO variable_measurements (
+                    assessment_session_id, variable_rr_study_id, examinee_id,
+                    part_no, trial_no, measurement_value, measured_at, created_at
+                ) VALUES (?, ?, ?, 1, 1, 10.25,
+                    '2026-06-14T10:02:00Z', '2026-06-14T10:02:00Z')""",
+                (session["assessment_session_id"], measurement_study_id, examinee_id),
+            ).lastrowid
+
+            trial = connection.execute(
+                "SELECT locked FROM attribute_rr_trials WHERE attribute_rr_trial_id = ?",
+                (trial_id,),
+            ).fetchone()
+            measurement = connection.execute(
+                "SELECT locked FROM variable_measurements WHERE variable_measurement_id = ?",
+                (measurement_id,),
+            ).fetchone()
+        self.assertEqual(trial["locked"], 1)
+        self.assertEqual(measurement["locked"], 1)
+
     def test_pass_result_gets_unique_certificate_id_and_png_hash(self):
         first = self.server.insert_result(self.payload())
         second = self.server.insert_result(self.payload(employee_id="E002"))
