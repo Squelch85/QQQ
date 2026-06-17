@@ -2902,10 +2902,10 @@ document.getElementById("training-form").addEventListener("submit", async (event
 document.getElementById("readiness-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const output = document.getElementById("readiness-output");
+  const form = Object.fromEntries(new FormData(event.currentTarget));
   try {
     const sessionId = requireAssessmentSession();
     const readiness = await validateCertificationReadiness(sessionId);
-    const form = Object.fromEntries(new FormData(event.currentTarget));
     let decision = null;
     if (readiness.status === "pending" && readiness.missing_requirements.length === 0) {
       decision = await createCertificationDecision({ assessment_session_id: sessionId, decision: "approved", approved_by: form.approved_by });
