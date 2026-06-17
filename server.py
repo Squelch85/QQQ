@@ -1375,6 +1375,120 @@ def search_results(query: dict) -> list[dict]:
     return select_result_records(records, mode)
 
 
+
+def query_assessment_history(query: dict) -> list[dict]:
+    conditions, parameters = [], []
+    employee_id = query.get("employee_id", [""])[0].strip()
+    qualification_code = query.get("qualification_code", [""])[0].strip()
+    if employee_id:
+        conditions.append("e.employee_id = ?")
+        parameters.append(employee_id)
+    if qualification_code:
+        conditions.append("qt.code = ?")
+        parameters.append(qualification_code)
+    where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+    with connect() as connection:
+        rows = connection.execute(
+            f"""SELECT
+                   s.assessment_session_id, s.session_code, s.status, s.created_at, s.updated_at,
+                   e.employee_id, e.employee_name, e.department,
+                   qt.code AS qualification_code, qt.name AS qualification_name,
+                   ap.revision AS assessment_plan_revision,
+                   gr.score AS written_score, gr.pass_status AS written_pass_status,
+                   cd.decision AS certification_decision, c.cert_id, c.status AS certificate_status
+               FROM assessment_sessions s
+               JOIN examinees e ON e.examinee_id = s.examinee_id
+               JOIN qualification_types qt ON qt.qualification_type_id = s.qualification_type_id
+               JOIN assessment_plans ap ON ap.assessment_plan_id = s.assessment_plan_id
+               LEFT JOIN submissions sub ON sub.assessment_session_id = s.assessment_session_id
+               LEFT JOIN grade_results gr ON gr.submission_id = sub.submission_id
+               LEFT JOIN certification_decisions cd ON cd.certification_decision_id = (
+                   SELECT cd2.certification_decision_id FROM certification_decisions cd2
+                   WHERE cd2.assessment_session_id = s.assessment_session_id
+                   ORDER BY cd2.certification_decision_id DESC LIMIT 1
+               )
+               LEFT JOIN certificates c ON c.assessment_session_id = s.assessment_session_id
+                    AND c.issue_mode = 'official'
+               {where}
+               ORDER BY s.created_at DESC, s.assessment_session_id DESC
+               LIMIT 1000""",
+            parameters,
+        ).fetchall()
+    return [row_to_dict(row) for row in rows]
+
+
+def query_rr_results(query: dict) -> dict:
+    session_id = int_value(query.get("assessment_session_id", [None])[0], default=None)
+    if not session_id:
+        raise ValueError("assessment_session_id is required.")
+    with connect() as connection:
+        attribute_rows = connection.execute(
+            """SELECT ars.rr_set_code, ars.title, arr.*
+               FROM attribute_rr_results arr
+               JOIN attribute_rr_sets ars ON ars.attribute_rr_set_id = arr.attribute_rr_set_id
+               WHERE arr.assessment_session_id = ?
+               ORDER BY arr.calculated_at DESC""",
+            (session_id,),
+        ).fetchall()
+        variable_rows = connection.execute(
+            """SELECT vrs.study_code, vrs.measurement_item, vrs.unit, vrr.*
+               FROM variable_rr_results vrr
+               JOIN variable_rr_studies vrs ON vrs.variable_rr_study_id = vrr.variable_rr_study_id
+               WHERE vrr.assessment_session_id = ?
+               ORDER BY vrr.calculated_at DESC""",
+            (session_id,),
+        ).fetchall()
+    return {
+        "assessment_session_id": session_id,
+        "attribute_rr_results": [row_to_dict(row) for row in attribute_rows],
+        "variable_rr_results": [row_to_dict(row) for row in variable_rows],
+    }
+
+
+def query_training_missing(query: dict) -> list[dict]:
+    qualification_code = query.get("qualification_code", [""])[0].strip()
+    conditions = ["ap.requires_training = 1"]
+    parameters = []
+    if qualification_code:
+        conditions.append("qt.code = ?")
+        parameters.append(qualification_code)
+    with connect() as connection:
+        rows = connection.execute(
+            f"""SELECT s.assessment_session_id, s.session_code, e.employee_id, e.employee_name,
+                      qt.code AS qualification_code, qt.name AS qualification_name
+               FROM assessment_sessions s
+               JOIN examinees e ON e.examinee_id = s.examinee_id
+               JOIN qualification_types qt ON qt.qualification_type_id = s.qualification_type_id
+               JOIN assessment_plans ap ON ap.assessment_plan_id = s.assessment_plan_id
+               LEFT JOIN training_records tr ON tr.examinee_id = s.examinee_id
+                    AND tr.qualification_type_id = s.qualification_type_id
+                    AND tr.status = 'verified'
+               WHERE {' AND '.join(conditions)} AND tr.training_record_id IS NULL
+               ORDER BY s.created_at DESC, s.assessment_session_id DESC
+               LIMIT 1000""",
+            parameters,
+        ).fetchall()
+    return [row_to_dict(row) for row in rows]
+
+
+def query_reassessment_due(query: dict) -> list[dict]:
+    as_of = query.get("as_of", [datetime.now(timezone.utc).date().isoformat()])[0]
+    with connect() as connection:
+        rows = connection.execute(
+            """SELECT er.result_id, er.cert_id, er.exam_type, er.exam_name, er.employee_id,
+                      er.employee_name, er.valid_to, er.cert_status, c.assessment_session_id
+               FROM exam_results er
+               LEFT JOIN certificates c ON c.cert_id = er.cert_id AND c.issue_mode = 'official'
+               WHERE er.cert_id IS NOT NULL
+                 AND er.valid_to IS NOT NULL
+                 AND er.cert_status IN ('VALID', 'EXPIRED')
+                 AND er.valid_to <= date(?, '+30 day')
+               ORDER BY er.valid_to ASC, er.result_id ASC
+               LIMIT 1000""",
+            (as_of,),
+        ).fetchall()
+    return [row_to_dict(row) for row in rows]
+
 def set_certificate_status(cert_id: str, next_status: str, reason: str) -> dict:
     if cert_id.startswith("LOCAL-"):
         raise LookupError("LOCAL_ONLY output is not an official certificate.")
@@ -1454,6 +1568,21 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/results":
             self.send_json({"results": search_results(parse_qs(parsed.query))})
+            return
+        if parsed.path == "/api/reports/assessment-history":
+            self.send_json({"sessions": query_assessment_history(parse_qs(parsed.query))})
+            return
+        if parsed.path == "/api/reports/rr":
+            try:
+                self.send_json(query_rr_results(parse_qs(parsed.query)))
+            except ValueError as error:
+                self.send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+            return
+        if parsed.path == "/api/reports/training-missing":
+            self.send_json({"sessions": query_training_missing(parse_qs(parsed.query))})
+            return
+        if parsed.path == "/api/reports/reassessment-due":
+            self.send_json({"results": query_reassessment_due(parse_qs(parsed.query))})
             return
         if parsed.path.startswith("/api/certificates/"):
             cert_id = unquote(parsed.path.removeprefix("/api/certificates/"))

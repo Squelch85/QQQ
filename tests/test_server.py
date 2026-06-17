@@ -294,6 +294,64 @@ class ServerStorageTest(unittest.TestCase):
         self.assertEqual(reissued["cert_status"], "CANCELLED")
         self.assertTrue(reissued["certificate_path"].endswith(f"CERT_{cert_id}.png"))
 
+
+    def test_phase6_reports_cover_history_rr_training_and_reassessment_queries(self):
+        result = self.server.insert_result(self.payload())
+        saved = self.server.save_certificate(result["cert_id"], b"\x89PNG\r\n\x1a\nreport")
+        result["cert_status"] = saved["cert_status"]
+
+        history = self.server.query_assessment_history({"employee_id": ["E001"]})
+        self.assertEqual(history[0]["assessment_session_id"], result["assessment_session_id"])
+        self.assertEqual(history[0]["qualification_code"], "GRR-WT")
+        self.assertEqual(history[0]["written_pass_status"], "PASS")
+        self.assertEqual(history[0]["cert_id"], result["cert_id"])
+
+        with self.server.connect() as connection:
+            session = self.server.create_assessment_session_in_connection(
+                connection,
+                {
+                    "employee_id": "E-RPT-001",
+                    "employee_name": "Report Inspector",
+                    "exam_type": "AOI-RPT",
+                    "exam_name": "AOI report qualification",
+                },
+                "2026-06-14T10:00:00Z",
+            )
+            plan = connection.execute(
+                "SELECT assessment_plan_id FROM assessment_sessions WHERE assessment_session_id = ?",
+                (session["assessment_session_id"],),
+            ).fetchone()
+            connection.execute(
+                "UPDATE assessment_plans SET requires_training = 1 WHERE assessment_plan_id = ?",
+                (plan["assessment_plan_id"],),
+            )
+            rr_set_id = connection.execute(
+                """INSERT INTO attribute_rr_sets (
+                    rr_set_code, title, sample_mode, created_at, updated_at
+                ) VALUES ('RPT-ATTR', 'Report attribute R&R', 'image',
+                    '2026-06-14T10:00:00Z', '2026-06-14T10:00:00Z')"""
+            ).lastrowid
+            connection.execute(
+                """INSERT INTO attribute_rr_results (
+                    assessment_session_id, attribute_rr_set_id, total_agreement_rate,
+                    ok_agreement_rate, ng_detection_rate, repeat_agreement_rate,
+                    type1_error_rate, type2_error_rate, defect_type_agreement_rate,
+                    final_decision, calculated_at, created_at
+                ) VALUES (?, ?, 0.95, 1.0, 0.9, 0.98, 0.0, 0.1, 0.88,
+                    'PASS', '2026-06-14T10:05:00Z', '2026-06-14T10:05:00Z')""",
+                (session["assessment_session_id"], rr_set_id),
+            )
+
+        rr = self.server.query_rr_results({"assessment_session_id": [str(session["assessment_session_id"])]})
+        self.assertEqual(rr["attribute_rr_results"][0]["rr_set_code"], "RPT-ATTR")
+        self.assertEqual(rr["attribute_rr_results"][0]["final_decision"], "PASS")
+
+        missing = self.server.query_training_missing({"qualification_code": ["AOI-RPT"]})
+        self.assertEqual(missing[0]["employee_id"], "E-RPT-001")
+
+        due = self.server.query_reassessment_due({"as_of": ["2027-05-20"]})
+        self.assertEqual(due[0]["cert_id"], result["cert_id"])
+
     def test_sqlite_result_selection_keeps_revisions_separate_and_csv_values_safe(self):
         self.server.insert_result(self.payload(80, "E100", "2026-06-13T10:00:00Z", "1"))
         best = self.server.insert_result(self.payload(95, "E100", "2026-06-14T10:00:00Z", "1"))
