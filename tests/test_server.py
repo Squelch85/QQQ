@@ -352,6 +352,114 @@ class ServerStorageTest(unittest.TestCase):
         due = self.server.query_reassessment_due({"as_of": ["2027-05-20"]})
         self.assertEqual(due[0]["cert_id"], result["cert_id"])
 
+
+    def test_attribute_and_variable_rr_submission_calculate_and_readiness_blocks_until_requirements_pass(self):
+        session = self.server.create_assessment_session(
+            {
+                "employee_id": "E-RR-FLOW",
+                "employee_name": "RR Flow",
+                "exam_type": "AOI-RR",
+                "exam_name": "AOI RR qualification",
+            }
+        )
+        with self.server.connect() as connection:
+            connection.execute(
+                """UPDATE assessment_plans
+                   SET requires_written_exam = 0,
+                       requires_attribute_rr = 1,
+                       requires_variable_rr = 1,
+                       requires_training = 1
+                   WHERE assessment_plan_id = ?""",
+                (session["assessment_plan_id"],),
+            )
+        blocked = self.server.validate_certification_readiness(session["assessment_session_id"])
+        self.assertEqual(blocked["status"], "rejected")
+        self.assertIn("attribute_rr", blocked["missing_requirements"])
+        self.assertIn("variable_rr", blocked["missing_requirements"])
+        self.assertIn("training_verification", blocked["missing_requirements"])
+
+        rr_set = self.server.create_attribute_rr_set(
+            {
+                "rr_set_code": "AOI-RR-1",
+                "title": "AOI attribute R&R",
+                "sample_mode": "image",
+                "criteria": {"min_total_agreement_rate": 0.75, "min_repeat_agreement_rate": 0.5},
+                "samples": [
+                    {"sample_code": "OK-1", "reference_status": "OK"},
+                    {"sample_code": "NG-1", "reference_status": "NG", "defect_type": "scratch"},
+                ],
+            }
+        )
+        with self.server.connect() as connection:
+            sample_ids = [
+                row["attribute_rr_sample_id"]
+                for row in connection.execute(
+                    "SELECT attribute_rr_sample_id FROM attribute_rr_samples WHERE attribute_rr_set_id = ? ORDER BY display_order",
+                    (rr_set["attribute_rr_set_id"],),
+                ).fetchall()
+            ]
+        attr_result = self.server.submit_attribute_rr_trials(
+            {
+                "assessment_session_id": session["assessment_session_id"],
+                "attribute_rr_set_id": rr_set["attribute_rr_set_id"],
+                "trials": [
+                    {"sampleId": sample_ids[0], "roundNo": 1, "judgment": "OK"},
+                    {"sampleId": sample_ids[0], "roundNo": 2, "judgment": "OK"},
+                    {"sampleId": sample_ids[1], "roundNo": 1, "judgment": "NG", "defectType": "scratch"},
+                    {"sampleId": sample_ids[1], "roundNo": 2, "judgment": "NG", "defectType": "scratch"},
+                ],
+            }
+        )
+        self.assertEqual(attr_result["final_decision"], "PASS")
+        self.assertEqual(attr_result["repeat_agreement_rate"], 1.0)
+
+        study = self.server.create_variable_rr_study(
+            {
+                "study_code": "DIM-RR-1",
+                "measurement_item": "Width",
+                "unit": "mm",
+                "instrument": "Caliper",
+                "part_count": 2,
+                "trial_count": 2,
+                "lsl": 9,
+                "usl": 13,
+                "criteria": {"max_percent_grr": 20, "conditional_percent_grr": 40},
+            }
+        )
+        var_result = self.server.submit_variable_measurements(
+            {
+                "assessment_session_id": session["assessment_session_id"],
+                "variable_rr_study_id": study["variable_rr_study_id"],
+                "measurements": [
+                    {"partNo": 1, "trialNo": 1, "value": 10.00},
+                    {"partNo": 1, "trialNo": 2, "value": 10.02},
+                    {"partNo": 2, "trialNo": 1, "value": 12.00},
+                    {"partNo": 2, "trialNo": 2, "value": 12.02},
+                ],
+            }
+        )
+        self.assertEqual(var_result["final_decision"], "PASS")
+
+        with self.server.connect() as connection:
+            connection.execute(
+                """INSERT INTO training_records (
+                    examinee_id, qualification_type_id, training_code, training_title,
+                    completed_at, hours, verified_by, status, created_at, updated_at
+                ) VALUES (?, ?, 'TR-AOI', 'AOI basics', '2026-06-14', 2, 'Trainer', 'verified',
+                    '2026-06-14T10:00:00Z', '2026-06-14T10:00:00Z')""",
+                (session["examinee_id"], session["qualification_type_id"]),
+            )
+        self.server.create_certification_decision(
+            {
+                "assessment_session_id": session["assessment_session_id"],
+                "decision": "approved",
+                "approved_by": "QA Manager",
+            }
+        )
+        ready = self.server.validate_certification_readiness(session["assessment_session_id"])
+        self.assertTrue(ready["ready"])
+        self.assertEqual(ready["status"], "approved")
+
     def test_sqlite_result_selection_keeps_revisions_separate_and_csv_values_safe(self):
         self.server.insert_result(self.payload(80, "E100", "2026-06-13T10:00:00Z", "1"))
         best = self.server.insert_result(self.payload(95, "E100", "2026-06-14T10:00:00Z", "1"))

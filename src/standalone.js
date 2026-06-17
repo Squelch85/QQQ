@@ -2172,6 +2172,38 @@ async function saveSubmission(payload) {
   });
 }
 
+async function createAttributeRrSet(payload) {
+  return (await request("/api/attribute-rr/sets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  })).rr_set;
+}
+
+async function submitAttributeRrTrials(payload) {
+  return (await request("/api/attribute-rr/trials", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  })).result;
+}
+
+async function createVariableRrStudy(payload) {
+  return (await request("/api/variable-rr/studies", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  })).study;
+}
+
+async function submitVariableMeasurements(payload) {
+  return (await request("/api/variable-rr/measurements", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  })).result;
+}
+
 async function validateCertificationReadiness(sessionId, qualificationTypeId = null, examineeId = null) {
   const body = {
     assessment_session_id: sessionId,
