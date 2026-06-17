@@ -74,20 +74,23 @@ export function buildExamReport(exam, records, mode = "latestPerEmployee") {
     };
   });
 
-  const questionStats = getQuestionDefinitions(exam, selectedRecords).map((question) => {
-    let attemptCount = 0;
-    let wrongCount = 0;
-    for (const record of selectedRecords) {
-      const item = record.items?.find((candidate) => candidate.questionId === question.questionId);
-      if (!item) continue;
-      attemptCount += 1;
-      if (item.status !== "correct") wrongCount += 1;
+  const questionCounters = new Map();
+  for (const record of selectedRecords) {
+    for (const item of record.items ?? []) {
+      const counter = questionCounters.get(item.questionId) ?? { attemptCount: 0, wrongCount: 0 };
+      counter.attemptCount += 1;
+      if (item.status !== "correct") counter.wrongCount += 1;
+      questionCounters.set(item.questionId, counter);
     }
+  }
+
+  const questionStats = getQuestionDefinitions(exam, selectedRecords).map((question) => {
+    const counter = questionCounters.get(question.questionId) ?? { attemptCount: 0, wrongCount: 0 };
     return {
       ...question,
-      attemptCount,
-      wrongCount,
-      wrongRate: attemptCount === 0 ? 0 : roundRate((wrongCount / attemptCount) * 100)
+      attemptCount: counter.attemptCount,
+      wrongCount: counter.wrongCount,
+      wrongRate: counter.attemptCount === 0 ? 0 : roundRate((counter.wrongCount / counter.attemptCount) * 100)
     };
   });
   const highWrongRate = questionStats
