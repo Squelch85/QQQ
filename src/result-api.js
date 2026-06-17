@@ -1,5 +1,11 @@
 import { createReportCsv } from "./report.js";
 
+function toQueryString(parameters = {}) {
+  return new URLSearchParams(
+    Object.entries(parameters).filter(([, value]) => value !== null && value !== undefined && value !== "")
+  ).toString();
+}
+
 async function request(path, options) {
   const response = await fetch(path, options);
   const payload = await response.json().catch(() => ({}));
@@ -157,8 +163,8 @@ export async function verifyCertificate(certId) {
 }
 
 export async function searchResults(parameters = {}) {
-  const query = new URLSearchParams(Object.entries(parameters).filter(([, value]) => value));
-  return (await request(`/api/results?${query}`)).results;
+  const query = toQueryString(parameters);
+  return (await request(`/api/results${query ? `?${query}` : ""}`)).results;
 }
 
 export async function cancelCertificate(certId, reason) {
@@ -170,8 +176,8 @@ export async function cancelCertificate(certId, reason) {
 }
 
 export function exportResultsCsvUrl(parameters = {}) {
-  const query = new URLSearchParams(Object.entries(parameters).filter(([, value]) => value));
-  return `/api/results.csv?${query}`;
+  const query = toQueryString(parameters);
+  return `/api/results.csv${query ? `?${query}` : ""}`;
 }
 
 // 기존 CSV 포맷이 필요한 관리용 선택 내보내기에서만 사용한다.

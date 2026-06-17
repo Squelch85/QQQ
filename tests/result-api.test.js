@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  exportResultsCsvUrl,
   makeLocalCertificateResult,
   makeResultPayload,
+  searchResults,
   validateCertificationReadiness
 } from "../src/result-api.js";
 
@@ -64,4 +66,30 @@ test("인증 준비도 API wrapper는 readiness 응답을 반환한다", async (
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("결과 조회 query는 0과 false 값을 보존하고 빈 값만 제거한다", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    let requestedPath = null;
+    globalThis.fetch = async (path) => {
+      requestedPath = path;
+      return {
+        ok: true,
+        json: async () => ({ results: [] })
+      };
+    };
+
+    const results = await searchResults({ limit: 0, include_cancelled: false, employee_id: "", department: null });
+
+    assert.deepEqual(results, []);
+    assert.equal(requestedPath, "/api/results?limit=0&include_cancelled=false");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("CSV export URL은 필터가 없으면 빈 물음표를 붙이지 않는다", () => {
+  assert.equal(exportResultsCsvUrl({ employee_id: "" }), "/api/results.csv");
+  assert.equal(exportResultsCsvUrl({ limit: 0 }), "/api/results.csv?limit=0");
 });
