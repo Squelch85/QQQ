@@ -2210,6 +2210,14 @@ async function submitVariableMeasurements(payload) {
   })).result;
 }
 
+async function submitVariableMeasurementsCsv(payload) {
+  return (await request("/api/variable-rr/measurements.csv", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  })).result;
+}
+
 async function validateCertificationReadiness(sessionId, qualificationTypeId = null, examineeId = null) {
   const body = {
     assessment_session_id: sessionId,

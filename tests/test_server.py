@@ -460,6 +460,45 @@ class ServerStorageTest(unittest.TestCase):
         self.assertTrue(ready["ready"])
         self.assertEqual(ready["status"], "approved")
 
+    def test_variable_rr_csv_submission_parses_alias_headers_and_calculates_result(self):
+        session = self.server.create_assessment_session(
+            {
+                "employee_id": "E-RR-CSV",
+                "employee_name": "RR CSV",
+                "exam_type": "DIM-RR",
+                "exam_name": "Dimension RR qualification",
+            }
+        )
+        study = self.server.create_variable_rr_study(
+            {
+                "study_code": "DIM-RR-CSV",
+                "measurement_item": "Width",
+                "part_count": 2,
+                "trial_count": 2,
+                "criteria": {"max_percent_grr": 20, "conditional_percent_grr": 40},
+            }
+        )
+
+        result = self.server.submit_variable_measurements_csv(
+            {
+                "assessment_session_id": session["assessment_session_id"],
+                "variable_rr_study_id": study["variable_rr_study_id"],
+                "csv_text": "part_no,trial_no,measurement_value,measured_at\n"
+                "1,1,10.00,2026-06-17T00:00:00Z\n"
+                "1,2,10.01,2026-06-17T00:01:00Z\n"
+                "2,1,12.00,2026-06-17T00:02:00Z\n"
+                "2,2,12.01,2026-06-17T00:03:00Z\n",
+            }
+        )
+
+        self.assertEqual(result["final_decision"], "PASS")
+        with self.server.connect() as connection:
+            count = connection.execute(
+                "SELECT COUNT(*) AS count FROM variable_measurements WHERE assessment_session_id = ?",
+                (session["assessment_session_id"],),
+            ).fetchone()["count"]
+        self.assertEqual(count, 4)
+
     def test_variable_rr_submission_rejects_duplicate_and_out_of_plan_measurements(self):
         session = self.server.create_assessment_session(
             {
