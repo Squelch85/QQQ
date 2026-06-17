@@ -1080,7 +1080,9 @@ def create_attribute_rr_set(payload: dict) -> dict:
                 ),
             )
         record_audit_log(connection, "attribute_rr_set", rr_set_id, "created", now=now)
-        return row_to_dict(connection.execute("SELECT * FROM attribute_rr_sets WHERE attribute_rr_set_id = ?", (rr_set_id,)).fetchone())
+        rr_set = row_to_dict(connection.execute("SELECT * FROM attribute_rr_sets WHERE attribute_rr_set_id = ?", (rr_set_id,)).fetchone())
+        rr_set["samples"] = [row_to_dict(row) for row in connection.execute("SELECT attribute_rr_sample_id, sample_code, sample_mode, image_path, physical_sample_code, display_order FROM attribute_rr_samples WHERE attribute_rr_set_id = ? ORDER BY display_order", (rr_set_id,)).fetchall()]
+        return rr_set
 
 
 def submit_attribute_rr_trials(payload: dict) -> dict:
@@ -1406,6 +1408,40 @@ def create_submission(payload: dict) -> dict:
             "grade_result": row_to_dict(grade) if grade else None,
         }
 
+
+
+def create_training_record(payload: dict) -> dict:
+    now = utc_now()
+    session_id = int_value(payload_value(payload, "assessment_session_id", "sessionId"), default=None)
+    if not session_id:
+        raise ValueError("assessment_session_id is required.")
+    with connect() as connection:
+        session = connection.execute("SELECT * FROM assessment_sessions WHERE assessment_session_id = ?", (session_id,)).fetchone()
+        if not session:
+            raise ValueError("assessment_session_id was not found.")
+        cursor = connection.execute(
+            """INSERT INTO training_records (
+                 examinee_id, qualification_type_id, training_code, training_title,
+                 completed_at, hours, evidence_path, evidence_hash, verified_by,
+                 status, created_at, updated_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                session["examinee_id"],
+                session["qualification_type_id"],
+                text_value(payload, "training_code", "trainingCode", default="BASIC-TRAINING"),
+                text_value(payload, "training_title", "trainingTitle", default="필수 교육"),
+                text_value(payload, "completed_at", "completedAt", required=True),
+                float_value(payload_value(payload, "hours"), default=0),
+                text_value(payload, "evidence_path", "evidencePath", default=""),
+                text_value(payload, "evidence_hash", "evidenceHash", default=""),
+                text_value(payload, "verified_by", "verifiedBy", default=""),
+                text_value(payload, "status", default="verified"),
+                now,
+                now,
+            ),
+        )
+        record_audit_log(connection, "training_record", cursor.lastrowid, "created", actor=text_value(payload, "verified_by", "verifiedBy", default=""), now=now)
+        return row_to_dict(connection.execute("SELECT * FROM training_records WHERE training_record_id = ?", (cursor.lastrowid,)).fetchone())
 
 def create_certification_decision(payload: dict) -> dict:
     session_id = int_value(payload_value(payload, "assessment_session_id", "session_id"), default=None)
@@ -1979,6 +2015,9 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/variable-rr/measurements.csv":
                 self.send_json({"result": submit_variable_measurements_csv(self.read_json())}, HTTPStatus.CREATED)
+                return
+            if parsed.path == "/api/training-records":
+                self.send_json({"training_record": create_training_record(self.read_json())}, HTTPStatus.CREATED)
                 return
             if parsed.path == "/api/certification/readiness":
                 payload = self.read_json()

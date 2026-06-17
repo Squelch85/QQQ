@@ -200,3 +200,27 @@ code { padding: 2px 5px; background: #e9e6dc; }
   .certificate-details { grid-template-columns: 1fr; }
   .certificate-preview-frame { margin-block: 16px; }
 }
+
+.workflow-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.workflow-card {
+  border: 1px solid #d9e2ef;
+  border-radius: 1rem;
+  padding: 1rem;
+  background: #fff;
+}
+
+.workflow-card h2 {
+  margin-top: 0;
+}
+
+.workflow-card textarea,
+.workflow-card input,
+.workflow-card select {
+  width: 100%;
+}

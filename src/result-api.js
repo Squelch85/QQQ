@@ -129,6 +129,14 @@ export async function submitVariableMeasurementsCsv(payload) {
   })).result;
 }
 
+export async function createTrainingRecord(payload) {
+  return (await request("/api/training-records", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  })).training_record;
+}
+
 export async function validateCertificationReadiness(sessionId, qualificationTypeId = null, examineeId = null) {
   const body = {
     assessment_session_id: sessionId,
