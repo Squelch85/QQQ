@@ -9,6 +9,7 @@ import io
 import json
 import mimetypes
 import os
+import math
 import secrets
 import sqlite3
 from datetime import datetime, timezone
@@ -917,18 +918,64 @@ def validate_certification_readiness_in_connection(
             "warnings": [],
         }
 
+    plan = connection.execute(
+        "SELECT * FROM assessment_plans WHERE assessment_plan_id = ?",
+        (session["assessment_plan_id"],),
+    ).fetchone()
+
+    missing_requirements: list[str] = []
+    blocking_reasons: list[str] = []
+    warnings: list[str] = []
+
     pass_row = passing_written_exam(connection, session_id)
-    if not pass_row:
+    if plan["requires_written_exam"] and not pass_row:
         grade_row = any_written_grade(connection, session_id)
+        missing_requirements.append("written_exam")
+        blocking_reasons.append("written_exam_not_passed" if grade_row else "written_exam_missing")
+
+    if plan["requires_attribute_rr"]:
+        attribute_row = connection.execute(
+            """SELECT 1 FROM attribute_rr_results
+               WHERE assessment_session_id = ? AND final_decision = 'PASS'
+               LIMIT 1""",
+            (session_id,),
+        ).fetchone()
+        if not attribute_row:
+            missing_requirements.append("attribute_rr")
+            blocking_reasons.append("attribute_rr_not_passed_or_missing")
+
+    if plan["requires_variable_rr"]:
+        variable_row = connection.execute(
+            """SELECT 1 FROM variable_rr_results
+               WHERE assessment_session_id = ? AND final_decision IN ('PASS', 'CONDITIONAL')
+               LIMIT 1""",
+            (session_id,),
+        ).fetchone()
+        if not variable_row:
+            missing_requirements.append("variable_rr")
+            blocking_reasons.append("variable_rr_not_accepted_or_missing")
+
+    if plan["requires_training"]:
+        training_row = connection.execute(
+            """SELECT 1 FROM training_records
+               WHERE examinee_id = ? AND qualification_type_id = ? AND status = 'verified'
+               LIMIT 1""",
+            (session["examinee_id"], session["qualification_type_id"]),
+        ).fetchone()
+        if not training_row:
+            missing_requirements.append("training_verification")
+            blocking_reasons.append("training_not_verified")
+
+    if blocking_reasons:
         return {
             "ready": False,
             "status": "rejected",
             "assessment_session_id": session_id,
             "qualification_type_id": session["qualification_type_id"],
             "examinee_id": session["examinee_id"],
-            "missing_requirements": ["written_exam"],
-            "blocking_reasons": ["written_exam_not_passed" if grade_row else "written_exam_missing"],
-            "warnings": [],
+            "missing_requirements": missing_requirements,
+            "blocking_reasons": blocking_reasons,
+            "warnings": warnings,
         }
 
     decision = latest_decision(connection, session_id)
@@ -941,8 +988,8 @@ def validate_certification_readiness_in_connection(
             "examinee_id": session["examinee_id"],
             "missing_requirements": ["certification_approval"],
             "blocking_reasons": ["approval_required"],
-            "warnings": [],
-            "written_exam": row_to_dict(pass_row),
+            "warnings": warnings,
+            "written_exam": row_to_dict(pass_row) if pass_row else None,
             "latest_decision": row_to_dict(decision) if decision else None,
         }
 
@@ -954,8 +1001,8 @@ def validate_certification_readiness_in_connection(
         "examinee_id": session["examinee_id"],
         "missing_requirements": [],
         "blocking_reasons": [],
-        "warnings": [],
-        "written_exam": row_to_dict(pass_row),
+        "warnings": warnings,
+        "written_exam": row_to_dict(pass_row) if pass_row else None,
         "latest_decision": row_to_dict(decision),
     }
 
@@ -973,6 +1020,224 @@ def validate_certification_readiness(
             int_value(examinee_id, default=None),
         )
 
+
+
+def _json_object(value, default=None) -> dict:
+    if value in (None, ""):
+        return dict(default or {})
+    parsed = json.loads(value) if isinstance(value, str) else value
+    if not isinstance(parsed, dict):
+        raise ValueError("Expected a JSON object.")
+    return parsed
+
+
+def create_attribute_rr_set(payload: dict) -> dict:
+    now = utc_now()
+    samples = payload_value(payload, "samples", default=[])
+    if not isinstance(samples, list) or not samples:
+        raise ValueError("samples must be a non-empty array.")
+    with connect() as connection:
+        cursor = connection.execute(
+            """INSERT INTO attribute_rr_sets (
+                 rr_set_code, revision, title, sample_mode, round_count,
+                 criteria_json, created_at, updated_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                text_value(payload, "rr_set_code", "rrSetCode", required=True),
+                validate_exam_revision(payload_value(payload, "revision", default=1)),
+                text_value(payload, "title", required=True),
+                text_value(payload, "sample_mode", "sampleMode", default="image"),
+                int_value(payload_value(payload, "round_count", "roundCount"), default=2),
+                json_text(payload_value(payload, "criteria", "criteria_json"), {}),
+                now,
+                now,
+            ),
+        )
+        rr_set_id = cursor.lastrowid
+        for index, sample in enumerate(samples, start=1):
+            connection.execute(
+                """INSERT INTO attribute_rr_samples (
+                     attribute_rr_set_id, sample_code, sample_mode, image_path,
+                     image_hash, physical_sample_code, reference_status, defect_type,
+                     reference_note, display_order, created_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    rr_set_id,
+                    text_value(sample, "sample_code", "sampleCode", required=True),
+                    text_value(sample, "sample_mode", "sampleMode", default=text_value(payload, "sample_mode", "sampleMode", default="image") if text_value(payload, "sample_mode", "sampleMode", default="image") != "mixed" else "image"),
+                    text_value(sample, "image_path", "imagePath", default=""),
+                    text_value(sample, "image_hash", "imageHash", default=""),
+                    text_value(sample, "physical_sample_code", "physicalSampleCode", default=""),
+                    text_value(sample, "reference_status", "referenceStatus", required=True).upper(),
+                    text_value(sample, "defect_type", "defectType", default=""),
+                    text_value(sample, "reference_note", "referenceNote", default=""),
+                    int_value(payload_value(sample, "display_order", "displayOrder"), default=index),
+                    now,
+                    now,
+                ),
+            )
+        record_audit_log(connection, "attribute_rr_set", rr_set_id, "created", now=now)
+        return row_to_dict(connection.execute("SELECT * FROM attribute_rr_sets WHERE attribute_rr_set_id = ?", (rr_set_id,)).fetchone())
+
+
+def submit_attribute_rr_trials(payload: dict) -> dict:
+    now = utc_now()
+    session_id = int_value(payload_value(payload, "assessment_session_id", "sessionId"))
+    rr_set_id = int_value(payload_value(payload, "attribute_rr_set_id", "rrSetId"))
+    if not session_id or not rr_set_id:
+        raise ValueError("assessment_session_id and attribute_rr_set_id are required.")
+    trials = payload_value(payload, "trials", default=[])
+    if not isinstance(trials, list) or not trials:
+        raise ValueError("trials must be a non-empty array.")
+    with connect() as connection:
+        session = connection.execute("SELECT * FROM assessment_sessions WHERE assessment_session_id = ?", (session_id,)).fetchone()
+        if not session:
+            raise ValueError("assessment_session_id was not found.")
+        for trial in trials:
+            connection.execute(
+                """INSERT INTO attribute_rr_trials (
+                     assessment_session_id, attribute_rr_set_id, attribute_rr_sample_id,
+                     examinee_id, round_no, judgment, defect_type, submitted_at, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    session_id, rr_set_id,
+                    int_value(payload_value(trial, "attribute_rr_sample_id", "sampleId")),
+                    session["examinee_id"],
+                    int_value(payload_value(trial, "round_no", "roundNo")),
+                    text_value(trial, "judgment", required=True).upper(),
+                    text_value(trial, "defect_type", "defectType", default=""),
+                    text_value(trial, "submitted_at", "submittedAt", default=now), now,
+                ),
+            )
+        return calculate_attribute_rr_result_in_connection(connection, session_id, rr_set_id, now)
+
+
+def calculate_attribute_rr_result_in_connection(connection, session_id: int, rr_set_id: int, now: str) -> dict:
+    rows = connection.execute(
+        """SELECT s.attribute_rr_sample_id, s.reference_status, s.defect_type AS reference_defect_type,
+                  t.round_no, t.judgment, t.defect_type
+           FROM attribute_rr_samples s
+           LEFT JOIN attribute_rr_trials t ON t.attribute_rr_sample_id = s.attribute_rr_sample_id
+                AND t.assessment_session_id = ?
+           WHERE s.attribute_rr_set_id = ? AND s.active = 1
+           ORDER BY s.display_order, s.attribute_rr_sample_id, t.round_no""", (session_id, rr_set_id)).fetchall()
+    if not rows or any(row["judgment"] is None for row in rows):
+        raise ValueError("All active samples must have submitted trials before calculation.")
+    total = len(rows)
+    matches = sum(1 for r in rows if r["judgment"] == r["reference_status"])
+    ok_rows = [r for r in rows if r["reference_status"] == "OK"]
+    ng_rows = [r for r in rows if r["reference_status"] == "NG"]
+    type1 = sum(1 for r in ok_rows if r["judgment"] == "NG") / len(ok_rows) if ok_rows else 0.0
+    type2 = sum(1 for r in ng_rows if r["judgment"] == "OK") / len(ng_rows) if ng_rows else 0.0
+    ng_detect = sum(1 for r in ng_rows if r["judgment"] == "NG") / len(ng_rows) if ng_rows else 1.0
+    ok_agree = sum(1 for r in ok_rows if r["judgment"] == "OK") / len(ok_rows) if ok_rows else 1.0
+    defect_rows = [r for r in ng_rows if r["reference_defect_type"]]
+    defect_agree = sum(1 for r in defect_rows if r["judgment"] == "NG" and r["defect_type"] == r["reference_defect_type"]) / len(defect_rows) if defect_rows else 1.0
+    by_sample = {}
+    for r in rows:
+        by_sample.setdefault(r["attribute_rr_sample_id"], set()).add(r["judgment"])
+    repeat_agree = sum(1 for judgments in by_sample.values() if len(judgments) == 1) / len(by_sample)
+    criteria = _json_object(connection.execute("SELECT criteria_json FROM attribute_rr_sets WHERE attribute_rr_set_id = ?", (rr_set_id,)).fetchone()["criteria_json"])
+    final = "PASS" if (matches / total >= float(criteria.get("min_total_agreement_rate", 0.9)) and repeat_agree >= float(criteria.get("min_repeat_agreement_rate", 0.9)) and type1 <= float(criteria.get("max_type1_error_rate", 0.05)) and type2 <= float(criteria.get("max_type2_error_rate", 0.1))) else "FAIL"
+    values = (session_id, rr_set_id, matches / total, ok_agree, ng_detect, repeat_agree, type1, type2, defect_agree, final, now, now)
+    connection.execute(
+        """INSERT INTO attribute_rr_results (
+             assessment_session_id, attribute_rr_set_id, total_agreement_rate, ok_agreement_rate,
+             ng_detection_rate, repeat_agreement_rate, type1_error_rate, type2_error_rate,
+             defect_type_agreement_rate, final_decision, calculated_at, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(assessment_session_id, attribute_rr_set_id) DO UPDATE SET
+             total_agreement_rate=excluded.total_agreement_rate, ok_agreement_rate=excluded.ok_agreement_rate,
+             ng_detection_rate=excluded.ng_detection_rate, repeat_agreement_rate=excluded.repeat_agreement_rate,
+             type1_error_rate=excluded.type1_error_rate, type2_error_rate=excluded.type2_error_rate,
+             defect_type_agreement_rate=excluded.defect_type_agreement_rate, final_decision=excluded.final_decision,
+             calculated_at=excluded.calculated_at""", values)
+    record_audit_log(connection, "attribute_rr_result", f"{session_id}:{rr_set_id}", "calculated", metadata={"final_decision": final}, now=now)
+    return row_to_dict(connection.execute("SELECT * FROM attribute_rr_results WHERE assessment_session_id = ? AND attribute_rr_set_id = ?", (session_id, rr_set_id)).fetchone())
+
+
+def create_variable_rr_study(payload: dict) -> dict:
+    now = utc_now()
+    with connect() as connection:
+        cursor = connection.execute(
+            """INSERT INTO variable_rr_studies (
+                 study_code, revision, study_purpose, measurement_item, unit, instrument,
+                 lsl, usl, part_count, trial_count, criteria_json, created_at, updated_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (text_value(payload, "study_code", "studyCode", required=True), validate_exam_revision(payload_value(payload, "revision", default=1)), text_value(payload, "study_purpose", "studyPurpose", default="inspector_qualification"), text_value(payload, "measurement_item", "measurementItem", required=True), text_value(payload, "unit", default=""), text_value(payload, "instrument", default=""), float_value(payload_value(payload, "lsl"), default=None), float_value(payload_value(payload, "usl"), default=None), int_value(payload_value(payload, "part_count", "partCount")), int_value(payload_value(payload, "trial_count", "trialCount")), json_text(payload_value(payload, "criteria", "criteria_json"), {}), now, now))
+        record_audit_log(connection, "variable_rr_study", cursor.lastrowid, "created", now=now)
+        return row_to_dict(connection.execute("SELECT * FROM variable_rr_studies WHERE variable_rr_study_id = ?", (cursor.lastrowid,)).fetchone())
+
+
+def submit_variable_measurements(payload: dict) -> dict:
+    now = utc_now()
+    session_id = int_value(payload_value(payload, "assessment_session_id", "sessionId"))
+    study_id = int_value(payload_value(payload, "variable_rr_study_id", "studyId"))
+    if not session_id or not study_id:
+        raise ValueError("assessment_session_id and variable_rr_study_id are required.")
+    measurements = payload_value(payload, "measurements", default=[])
+    if not isinstance(measurements, list) or not measurements:
+        raise ValueError("measurements must be a non-empty array.")
+    with connect() as connection:
+        session = connection.execute("SELECT * FROM assessment_sessions WHERE assessment_session_id = ?", (session_id,)).fetchone()
+        if not session:
+            raise ValueError("assessment_session_id was not found.")
+        for item in measurements:
+            connection.execute(
+                """INSERT INTO variable_measurements (
+                     assessment_session_id, variable_rr_study_id, examinee_id,
+                     part_no, trial_no, measurement_value, measured_at, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (session_id, study_id, session["examinee_id"], int_value(payload_value(item, "part_no", "partNo")), int_value(payload_value(item, "trial_no", "trialNo")), float_value(payload_value(item, "measurement_value", "value")), text_value(item, "measured_at", "measuredAt", default=now), now),
+            )
+        return calculate_variable_rr_result_in_connection(connection, session_id, study_id, now)
+
+
+def calculate_variable_rr_result_in_connection(connection, session_id: int, study_id: int, now: str) -> dict:
+    study = connection.execute("SELECT * FROM variable_rr_studies WHERE variable_rr_study_id = ?", (study_id,)).fetchone()
+    if not study:
+        raise ValueError("variable_rr_study_id was not found.")
+    rows = connection.execute("SELECT part_no, trial_no, measurement_value FROM variable_measurements WHERE assessment_session_id = ? AND variable_rr_study_id = ?", (session_id, study_id)).fetchall()
+    expected = int(study["part_count"]) * int(study["trial_count"])
+    if len(rows) != expected:
+        raise ValueError("All part/trial measurements are required before calculation.")
+    by_part = {}
+    for row in rows:
+        by_part.setdefault(row["part_no"], []).append(float(row["measurement_value"]))
+    ranges = [max(values) - min(values) for values in by_part.values()]
+    averages = [sum(values) / len(values) for values in by_part.values()]
+    rbar = sum(ranges) / len(ranges)
+    xbar_range = max(averages) - min(averages)
+    d2 = {2: 1.128, 3: 1.693, 4: 2.059, 5: 2.326}.get(int(study["trial_count"]), 1.128)
+    d2_parts = {2: 1.128, 3: 1.693, 4: 2.059, 5: 2.326, 6: 2.534, 7: 2.704, 8: 2.847, 9: 2.970, 10: 3.078}.get(int(study["part_count"]), 3.078)
+    ev = rbar / d2
+    av = 0.0
+    grr = math.sqrt(ev * ev + av * av)
+    part_variation = xbar_range / d2_parts
+    total_variation = math.sqrt(grr * grr + part_variation * part_variation)
+    percent_grr = (grr / total_variation * 100.0) if total_variation else 100.0
+    ndc = 1.41 * (part_variation / grr) if grr else 999.0
+    tolerance = (float(study["usl"]) - float(study["lsl"])) if study["usl"] is not None and study["lsl"] is not None else None
+    percent_tolerance = (grr / tolerance * 100.0) if tolerance and tolerance > 0 else None
+    criteria = _json_object(study["criteria_json"])
+    pass_limit = float(criteria.get("max_percent_grr", 10.0))
+    conditional_limit = float(criteria.get("conditional_percent_grr", 30.0))
+    final = "PASS" if percent_grr <= pass_limit else "CONDITIONAL" if percent_grr <= conditional_limit else "FAIL"
+    connection.execute(
+        """INSERT INTO variable_rr_results (
+             assessment_session_id, variable_rr_study_id, ev, av, grr, part_variation,
+             total_variation, percent_grr, ndc, tolerance, percent_tolerance,
+             final_decision, calculated_at, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(assessment_session_id, variable_rr_study_id) DO UPDATE SET
+             ev=excluded.ev, av=excluded.av, grr=excluded.grr, part_variation=excluded.part_variation,
+             total_variation=excluded.total_variation, percent_grr=excluded.percent_grr, ndc=excluded.ndc,
+             tolerance=excluded.tolerance, percent_tolerance=excluded.percent_tolerance,
+             final_decision=excluded.final_decision, calculated_at=excluded.calculated_at""",
+        (session_id, study_id, ev, av, grr, part_variation, total_variation, percent_grr, ndc, tolerance, percent_tolerance, final, now, now),
+    )
+    record_audit_log(connection, "variable_rr_result", f"{session_id}:{study_id}", "calculated", metadata={"final_decision": final}, now=now)
+    return row_to_dict(connection.execute("SELECT * FROM variable_rr_results WHERE assessment_session_id = ? AND variable_rr_study_id = ?", (session_id, study_id)).fetchone())
 
 def record_certification_decision_in_connection(
     connection: sqlite3.Connection,
@@ -1622,6 +1887,18 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/submissions":
                 self.send_json(create_submission(self.read_json()), HTTPStatus.CREATED)
+                return
+            if parsed.path == "/api/attribute-rr/sets":
+                self.send_json({"rr_set": create_attribute_rr_set(self.read_json())}, HTTPStatus.CREATED)
+                return
+            if parsed.path == "/api/attribute-rr/trials":
+                self.send_json({"result": submit_attribute_rr_trials(self.read_json())}, HTTPStatus.CREATED)
+                return
+            if parsed.path == "/api/variable-rr/studies":
+                self.send_json({"study": create_variable_rr_study(self.read_json())}, HTTPStatus.CREATED)
+                return
+            if parsed.path == "/api/variable-rr/measurements":
+                self.send_json({"result": submit_variable_measurements(self.read_json())}, HTTPStatus.CREATED)
                 return
             if parsed.path == "/api/certification/readiness":
                 payload = self.read_json()
