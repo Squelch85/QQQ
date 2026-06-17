@@ -64,6 +64,12 @@ class ServerStorageTest(unittest.TestCase):
                 row["version"]
                 for row in connection.execute("SELECT version FROM schema_migrations").fetchall()
             }
+            indexes = {
+                row["name"]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'index'"
+                ).fetchall()
+            }
             connection.execute(
                 """INSERT INTO exam_results (
                     exam_type, exam_name, exam_version, employee_id, employee_name,
@@ -79,6 +85,7 @@ class ServerStorageTest(unittest.TestCase):
         self.assertIn("schema_migrations", tables)
         self.assertIn("assessment_sessions", tables)
         self.assertIn("certificates", tables)
+        self.assertIn("idx_exam_results_reassessment_due", indexes)
         self.assertEqual(migrations, {1, 2})
         rows = self.server.search_results({"search": ["LEGACY"]})
         self.assertEqual(rows[0]["employee_id"], "LEGACY")

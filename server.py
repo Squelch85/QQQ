@@ -64,6 +64,9 @@ CREATE INDEX IF NOT EXISTS idx_exam_results_exam_date ON exam_results(exam_date)
 CREATE INDEX IF NOT EXISTS idx_exam_results_employee_id ON exam_results(employee_id);
 CREATE INDEX IF NOT EXISTS idx_exam_results_employee_name ON exam_results(employee_name);
 CREATE INDEX IF NOT EXISTS idx_exam_results_pass_status ON exam_results(pass_status);
+CREATE INDEX IF NOT EXISTS idx_exam_results_reassessment_due
+    ON exam_results(cert_status, valid_to, result_id)
+    WHERE cert_id IS NOT NULL AND valid_to IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS certificate_status_history (
     history_id INTEGER PRIMARY KEY AUTOINCREMENT,
