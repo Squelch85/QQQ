@@ -8,7 +8,8 @@
     "start": "python3 server.py",
     "test": "node --test && python3 -m unittest tests/test_server.py",
     "check": "npm run build && python3 -m py_compile server.py && node --check src/standalone.js && node --check src/app.js && node --check src/exam.js && node --check src/attempt.js && node --check src/grading.js && node --check src/converter.js && node --check src/report.js && node --check src/certificate.js && node --check src/result-api.js && node --check src/default-exam.js",
-    "build": "node tools/build-standalone.mjs"
+    "build": "node tools/build-standalone.mjs",
+    "benchmark:report": "node tools/benchmark-report.mjs"
   },
   "engines": {
     "node": ">=20"
