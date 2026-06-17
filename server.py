@@ -1182,13 +1182,39 @@ def submit_variable_measurements(payload: dict) -> dict:
         session = connection.execute("SELECT * FROM assessment_sessions WHERE assessment_session_id = ?", (session_id,)).fetchone()
         if not session:
             raise ValueError("assessment_session_id was not found.")
+        study = connection.execute("SELECT part_count, trial_count FROM variable_rr_studies WHERE variable_rr_study_id = ?", (study_id,)).fetchone()
+        if not study:
+            raise ValueError("variable_rr_study_id was not found.")
+        part_count = int(study["part_count"])
+        trial_count = int(study["trial_count"])
+        seen_measurements = set()
+        prepared_measurements = []
         for item in measurements:
+            part_no = int_value(payload_value(item, "part_no", "partNo"))
+            trial_no = int_value(payload_value(item, "trial_no", "trialNo"))
+            if part_no < 1 or part_no > part_count or trial_no < 1 or trial_no > trial_count:
+                raise ValueError("measurement part_no/trial_no is outside the study plan.")
+            measurement_key = (part_no, trial_no)
+            if measurement_key in seen_measurements:
+                raise ValueError("duplicate part_no/trial_no measurements are not allowed.")
+            seen_measurements.add(measurement_key)
+            prepared_measurements.append((
+                session_id,
+                study_id,
+                session["examinee_id"],
+                part_no,
+                trial_no,
+                float_value(payload_value(item, "measurement_value", "value")),
+                text_value(item, "measured_at", "measuredAt", default=now),
+                now,
+            ))
+        for prepared in prepared_measurements:
             connection.execute(
                 """INSERT INTO variable_measurements (
                      assessment_session_id, variable_rr_study_id, examinee_id,
                      part_no, trial_no, measurement_value, measured_at, created_at
                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (session_id, study_id, session["examinee_id"], int_value(payload_value(item, "part_no", "partNo")), int_value(payload_value(item, "trial_no", "trialNo")), float_value(payload_value(item, "measurement_value", "value")), text_value(item, "measured_at", "measuredAt", default=now), now),
+                prepared,
             )
         return calculate_variable_rr_result_in_connection(connection, session_id, study_id, now)
 
